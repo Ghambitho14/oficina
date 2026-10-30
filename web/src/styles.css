@@ -599,7 +599,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 
 .board-review { display: grid; gap: 8px; margin-top: 8px; }
 .board-review label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
-.board-review textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.board-review textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 8px; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
 .memory-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
 .memory-list li { padding: 10px; background: var(--bg); border-radius: 8px; }
 .memory-list p { margin: 4px 0 0; }

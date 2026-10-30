@@ -74,6 +74,59 @@ test('al solucionarse se quita solo', async () => {
   assert.equal((await cards('web')).length, 0);
 });
 
+// Una alerta informativa de certificados hace que Leo revise de nuevo (sin esperar el minuto de "Revisar ahora").
+const leoReviews = () => alert({ kind: 'cert_info', severity: 'info', name: 'ejemplo' }, 'ciberseguridad');
+const leo = async () => (await oficina.api('GET', '/agents/ciberseguridad')).body.report;
+const memory = async () => (await oficina.api('GET', '/agents/ciberseguridad/memory')).body;
+
+test('"Revisado" pide qué se hizo, lo guarda en la memoria y Leo deja de marcarlo', async () => {
+  await leoReviews();
+  const [card] = await cards('alertas de Snort');
+  assert.equal(card.severity, 'warn');
+  assert.equal((await oficina.api('POST', `/board/${card.id}/review`, { note: '  ' })).status, 400);
+  assert.equal((await oficina.api('POST', `/board/${card.id}/review`, { note: 'Escaneos normales, sin riesgo' })).status, 200);
+  assert.equal((await cards('alertas de Snort')).length, 0);
+  const report = await waitFor(async () => {
+    const r = await leo();
+    return r.status === 'ok' && r;
+  }, 'que Leo quede en verde');
+  assert.match(report.findings.find((f) => /Snort/.test(f.title)).detail, /Ya revisado por admin: Escaneos normales/);
+  const [m] = (await memory()).filter((x) => /Snort/.test(x.title));
+  assert.equal(m.reviewedValue, 35);
+  assert.equal(m.acknowledged, 1);
+});
+
+test('si empeora mucho vuelve a avisar y recuerda lo que se hizo', async () => {
+  monitor.state.snort = 30;
+  await leoReviews();
+  assert.equal((await leo()).status, 'ok', 'sin doblarse sigue revisado');
+  monitor.state.snort = 80;
+  await leoReviews();
+  assert.equal((await leo()).status, 'warn');
+  const [card] = await cards('alertas de Snort');
+  assert.match(card.detail, /Empeoró: estaba en 35.*Escaneos normales/);
+});
+
+test('si se va y vuelve, cuenta otra vez y avisa de nuevo', async () => {
+  const [before] = (await memory()).filter((x) => /Snort/.test(x.title));
+  monitor.state.snort = 5;
+  await leoReviews();
+  assert.equal((await cards('alertas de Snort')).length, 0);
+  assert.equal((await memory()).find((x) => x.id === before.id).acknowledged, 0);
+  monitor.state.snort = 35;
+  await leoReviews();
+  assert.equal((await cards('alertas de Snort')).length, 1);
+  const again = (await memory()).find((x) => x.id === before.id);
+  assert.equal(again.times, before.times + 1);
+  assert.equal(again.note, 'Escaneos normales, sin riesgo');
+});
+
+test('un recuerdo se puede olvidar', async () => {
+  const [m] = await memory();
+  assert.equal((await oficina.api('DELETE', `/memory/${m.id}`)).status, 200);
+  assert.equal((await oficina.api('DELETE', `/memory/${m.id}`)).status, 404);
+});
+
 test('los agentes apagados no ocupan la pizarra', async () => {
   await alert({ kind: 'container_down', severity: 'crit', name: 'web', detail: 'Exited (1)' });
   assert.equal((await cards('web')).length, 1);

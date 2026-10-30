@@ -55,7 +55,7 @@ export async function startFakeMonitor() {
   const host = { cpuPct: 12, cpus: 2, uptimeSec: 86400, load1: 0.3, load5: 0.4, load15: 0.5, memPct: 41, swapPct: 3, memTotal: 8e9, memUsed: 3.3e9, swapTotal: 2e9, swapUsed: 6e7, diskTotal: 80e9, diskFree: 40e9, diskPct: 50 };
   const domains = [{ domain: 'example.com', path: '/', latencyMs: 120, ok: true, status: 200, certDays: 90, error: null }];
   // logs: líneas por id de contenedor. noLogsRoute: imita un monitor viejo, sin la ruta de logs.
-  const state = { down: false, requests: 0, logs: {}, logQueries: [], noLogsRoute: false };
+  const state = { down: false, requests: 0, logs: {}, logQueries: [], noLogsRoute: false, snort: 35 };
 
   const json = (res, body, code = 200) => {
     res.writeHead(code, { 'content-type': 'application/json' });
@@ -77,7 +77,7 @@ export async function startFakeMonitor() {
       if (state.noLogsRoute) return res.writeHead(404, { 'content-type': 'text/html' }).end('Cannot GET');
       return json(res, { id: logsOf, lines: state.logs[logsOf] || [] });
     }
-    if (url.pathname === '/api/snort/summary') return json(res, { hours: 24, n: 35, sources: 4, topSources: [{ src: '203.0.113.9', n: 20 }], topRules: [{ msg: 'ET SCAN', n: 30 }] });
+    if (url.pathname === '/api/snort/summary') return json(res, { hours: 24, n: state.snort, sources: 4, topSources: [{ src: '203.0.113.9', n: 20 }], topRules: [{ msg: 'ET SCAN', n: 30 }] });
     json(res, { error: 'not found' }, 404);
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

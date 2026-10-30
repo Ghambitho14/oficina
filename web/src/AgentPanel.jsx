@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, STATUS, timeAgo } from './api.js';
 import { Gauge } from './ui.jsx';
 import { InstagramWork, ClientesWork } from './panel/Negocio.jsx';

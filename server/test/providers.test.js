@@ -128,6 +128,18 @@ test('las sugerencias de la IA van a la pizarra y no quedan en el diagnóstico',
   assert.ok(board.some((b) => b.agent === 'informatica' && b.kind === 'sugerencia' && b.title === 'Revisa la conexión al monitor'), JSON.stringify(board));
 });
 
+test('la memoria del agente le llega a la IA aunque no haya Obsidian', async () => {
+  const board = (await oficina.api('GET', '/board')).body;
+  const card = board.find((b) => b.agent === 'informatica' && b.kind === 'problema');
+  assert.ok(card, JSON.stringify(board));
+  const n = requests.length;
+  assert.equal((await oficina.api('POST', `/board/${card.id}/review`, { note: 'Ya lo vimos con el equipo' })).status, 200);
+  await waitFor(() => requests.slice(n).find((r) => JSON.stringify(r.body).includes('Ya lo vimos con el equipo')) || (async () => {
+    await oficina.api('POST', '/chat/informatica', { message: '¿Qué recuerdas?' });
+    return requests.slice(n).find((r) => JSON.stringify(r.body).includes('Ya lo vimos con el equipo'));
+  })(), 'que la IA reciba la memoria');
+});
+
 test('el reporte guarda de qué modelo y de cuándo es el diagnóstico, y si se reusó', async () => {
   // Sin monitor y sin revisiones locales Ana reporta un problema: hay diagnóstico de la IA.
   const first = await waitFor(async () => {
