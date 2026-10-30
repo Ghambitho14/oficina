@@ -1,0 +1,13 @@
+{
+  "name": "oficina",
+  "private": true,
+  "scripts": {
+    "setup": "npm install && npm install --prefix server && npm install --prefix web",
+    "dev": "concurrently --names \"server,web\" --prefix-colors \"blue,magenta\" \"npm run dev --prefix server\" \"npm run dev --prefix web\"",
+    "hash-password": "npm run hash-password --prefix server --",
+    "test": "npm test --prefix server && npm run build --prefix web"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}

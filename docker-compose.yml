@@ -1,0 +1,108 @@
+# Despliegue en Coolify: New Resource → Docker Compose → este repositorio.
+# Asigna tu dominio al servicio "oficina" (puerto 3000); Coolify/Traefik pone el HTTPS.
+services:
+  oficina:
+    build: .
+    restart: unless-stopped
+    # Para llegar a un Ollama o LM Studio que corre en el mismo servidor: OLLAMA_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      - ORG_NAME=${ORG_NAME:-}
+      - APP_NAME=${APP_NAME:-}
+      - SERVER_NAME=${SERVER_NAME:-Servidor}
+      - SERVER_STACK=${SERVER_STACK:-}
+      - ORG_ABOUT=${ORG_ABOUT:-}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - WATCH_URLS=${WATCH_URLS}
+      - ALLOWED_PORTS=${ALLOWED_PORTS:-}
+      - AGENT_INTERVAL_MIN=${AGENT_INTERVAL_MIN:-5}
+      - AGENT_MODE=${AGENT_MODE:-}
+      - AGENTS=${AGENTS:-}
+      # Botón "Agentes de monitor" en una instalación nueva (on/off); después manda el panel.
+      - MONITOR_AGENTS=${MONITOR_AGENTS:-off}
+      - LOCAL_CHECKS=${LOCAL_CHECKS:-true}
+      - MONITOR_URL=${MONITOR_URL:-}
+      - MONITOR_POLL_SEC=${MONITOR_POLL_SEC:-15}
+      - ALERT_ROUTES=${ALERT_ROUTES:-}
+      - ALERT_DEFAULT_AGENT=${ALERT_DEFAULT_AGENT:-}
+      - SNORT_ALERTS_WARN=${SNORT_ALERTS_WARN:-}
+      - TIMEZONE=${TIMEZONE:-UTC}
+      - OBSIDIAN_DIR=${OBSIDIAN_DIR:-}
+      - OBSIDIAN_FOLDER=${OBSIDIAN_FOLDER:-Oficina}
+      - OBSIDIAN_HOME_NOTE=${OBSIDIAN_HOME_NOTE:-}
+      - OBSIDIAN_MEMORY_NOTES=${OBSIDIAN_MEMORY_NOTES:-}
+      - OBSIDIAN_MEMORY_CHARS=${OBSIDIAN_MEMORY_CHARS:-6000}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-claude-haiku-5-5}
+      - OLLAMA_URL=${OLLAMA_URL:-}
+      - OLLAMA_MODELS=${OLLAMA_MODELS:-}
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY:-}
+      - OPENCODE_MODELS=${OPENCODE_MODELS:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODELS=${OPENAI_MODELS:-}
+      - OPENAI_NAME=${OPENAI_NAME:-}
+      - OLLAMA_REASONING=${OLLAMA_REASONING:-}
+      - OPENCODE_REASONING=${OPENCODE_REASONING:-}
+      - OPENAI_REASONING=${OPENAI_REASONING:-}
+      - AI_TIMEOUT_SEC=${AI_TIMEOUT_SEC:-300}
+      - AI_DAILY_TOKENS=${AI_DAILY_TOKENS:-300000}
+      - KEEP_DAYS=${KEEP_DAYS:-30}
+      - LEADS_MODEL=${LEADS_MODEL:-}
+      - LEADS_MAX_SEARCHES=${LEADS_MAX_SEARCHES:-5}
+      - LEADS_PER_DAY=${LEADS_PER_DAY:-5}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - COOLIFY_URL=${COOLIFY_URL:-}
+      - COOLIFY_TOKEN=${COOLIFY_TOKEN:-}
+      - BACKUP_MAX_HOURS=${BACKUP_MAX_HOURS:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - LOG_ERRORS_WARN=${LOG_ERRORS_WARN:-}
+      - SSH_HOST=${SSH_HOST:-}
+      - SSH_USER=${SSH_USER:-oficina}
+      - SSH_PORT=${SSH_PORT:-22}
+      - SSH_AI_QUERIES=${SSH_AI_QUERIES:-3}
+      - DOCKER_API=http://docker-proxy:2375
+    volumes:
+      - oficina-data:/data
+      # config/agentes.json: nombre, personalidad, umbrales y alertas de cada agente. Solo lectura: se edita en el host
+      # y la Oficina lo relee sola. Si la carpeta está vacía, se usa la plantilla server/agentes.example.json.
+      - ./config:/app/config:ro
+      # Bóveda de Obsidian (memoria de los agentes). Es la única carpeta del host con escritura;
+      # los agentes solo escriben dentro de OBSIDIAN_FOLDER. Si no usas Obsidian, queda una carpeta vacía.
+      - ${OBSIDIAN_HOST_DIR:-./obsidian}:/vault
+      # Todo lo del host se monta en SOLO LECTURA: los agentes observan, no tocan.
+      - /proc:/host/proc:ro
+      - /var/log:/host/var/log:ro
+      - /var/lib/update-notifier:/host/var/lib/update-notifier:ro
+      # Llave SSH para consultar al servidor vigilado (opcional): id_ed25519 (dueño uid 1000, chmod 600) y known_hosts.
+      - ${SSH_DIR:-./ssh}:/ssh:ro
+    # Grupo "adm" (gid 4 en Ubuntu/Debian): permite leer /var/log/auth.log sin ser root.
+    group_add:
+      - "4"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - docker-proxy
+
+  # Intermediario del socket de Docker: solo permite LEER contenedores y sus logs (nada de crear, parar o borrar).
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - POST=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  oficina-data:

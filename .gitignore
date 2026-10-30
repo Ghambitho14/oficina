@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+.env
+*.db
+# Llaves SSH de la Oficina (SSH_DIR): nunca al repositorio
+ssh/
+id_ed25519*
+id_rsa*
+# Tus agentes (la plantilla es server/agentes.example.json)
+config/agentes.json
+
+# Local de cada máquina
+.claude/

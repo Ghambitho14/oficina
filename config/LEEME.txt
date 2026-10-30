@@ -1,0 +1,1 @@
+# Aquí va tu agentes.json (copia server/agentes.example.json). No se sube al repositorio.
