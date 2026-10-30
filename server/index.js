@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { catalog, activeAgents, allAgents, findAgent, agentForPuesto, idsForPuesto, coverage, aiModels } from './agents/index.js';
 import { agentsFile, agentsFileStatus, legacyVars, TEMPLATE_PATH } from './agents-file.js';
-import { latestReport, history, recentAlerts, logActivity, addChatMessage, chatHistory, clearChat, recentReports, listBoard, dismissBoard, countReportsSince, getSetting, setSetting, listLeads, updateLead, businessSummary, listActivity, latestSample, series, uptime, usageSummary, dbSizeMb, onActivity } from './db.js';
+import { latestReport, history, recentAlerts, logActivity, addChatMessage, chatHistory, clearChat, recentReports, listBoard, dismissBoard, boardCard, listMemory, forgetMemory, countReportsSince, getSetting, setSetting, listLeads, updateLead, businessSummary, listActivity, latestSample, series, uptime, usageSummary, dbSizeMb, onActivity } from './db.js';
 import { login, logout, requireAuth, authConfigured } from './auth.js';
-import { startScheduler, runAll, runAgent, createContext, working, rounds } from './scheduler.js';
+import { startScheduler, runAll, runAgent, createContext, reviewCard, working, rounds } from './scheduler.js';
 import { aiEnabled, aiEnabledFor, budget, chat, AiUnavailable, missingFor, modelOf } from './ai.js';
 import { providerList, refreshModels, resolveModel } from './providers.js';
 import { telegramEnabled, sendTest } from './notify/telegram.js';
@@ -102,6 +102,24 @@ app.get('/api/agents/:id', (req, res) => {
 });
 
 app.get('/api/alerts', (_req, res) => res.json(recentAlerts()));
+
+// "Revisado": el agente anota en su memoria qué se hizo y la tarjeta sale de la pizarra.
+app.post('/api/board/:id/review', (req, res) => {
+  const card = boardCard(Number(req.params.id));
+  if (!card) return res.status(404).json({ error: 'Esa tarjeta ya no está en la pizarra' });
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+  if (!note) return res.status(400).json({ error: 'Escribe qué se hizo: el agente lo anota en su memoria' });
+  if (note.length > 500) return res.status(400).json({ error: 'Máximo 500 caracteres' });
+  reviewCard(card, note, req.user);
+  res.json({ ok: true });
+});
+
+// Lo que recuerda cada agente.
+app.get('/api/agents/:id/memory', (req, res) => res.json(listMemory(req.params.id)));
+app.delete('/api/memory/:id', (req, res) => {
+  if (!forgetMemory(Number(req.params.id))) return res.status(404).json({ error: 'Ese recuerdo ya no está' });
+  res.json({ ok: true });
+});
 
 // La pizarra: problemas abiertos y sugerencias de los agentes activos.
 app.get('/api/board', (_req, res) => res.json(listBoard(activeAgents().map((a) => a.id))));

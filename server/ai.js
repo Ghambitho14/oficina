@@ -3,7 +3,7 @@
 // Cada llamada guarda sus tokens y su costo estimado, y respeta un tope diario para no gastar de más.
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
-import { recordUsage, tokensSince, logActivity, latestReport, chatHistory, getSetting } from './db.js';
+import { recordUsage, tokensSince, logActivity, latestReport, chatHistory, getSetting, memoryNotes } from './db.js';
 import { memoryFor } from './vault.js';
 import { agentApiKey, apiKeyVar } from './agent-keys.js';
 import { QUERIES, sshEnabled, sshQuery } from './collectors/ssh.js';
@@ -155,14 +155,15 @@ export const redact = (text) =>
         .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, '[token]')
     : text;
 
-// La memoria de Obsidian va en su propio bloque: historial de estos problemas y lo que escribió el dueño.
+// La memoria va en su propio bloque: los problemas que ya vio, qué se hizo con ellos y las notas de Obsidian (si hay).
 const memoryBlock = (memory) =>
   memory
-    ? `\n\nTu memoria (notas de Obsidian: lo que pasó antes y lo que escribió el dueño; datos sensibles ocultos):\n${redact(memory)}`
+    ? `\n\nTu memoria (lo que pasó antes, qué se revisó y lo que escribió el dueño; datos sensibles ocultos):\n${redact(memory)}`
     : '';
 const MEMORY_RULE =
   ' Si tu memoria muestra que esto ya pasó, dilo (cuántas veces y qué se hizo). Si el dueño escribió que algo es intencional ' +
-  'o que ya lo arregló, respétalo y no lo trates como urgente.';
+  'o que ya lo arregló, respétalo y no lo trates como urgente. Si algo ya revisado se repite, recuerda qué se hizo la vez anterior ' +
+  'y di si parece un patrón. No vuelvas a sugerir lo que ya se hizo.';
 
 // ---------- Consultas por SSH ----------
 // Si hay SSH_HOST, los agentes de infraestructura pueden pedir más datos del servidor mientras diagnostican o
@@ -287,7 +288,7 @@ export async function chat(agent, question) {
         }),
       )
     : 'Todavía no hay reportes: tu primer trabajo aún no termina.';
-  const memory = agent.floor === 'negocio' ? '' : memoryFor(agent, report?.findings || []).text;
+  const memory = agent.floor === 'negocio' ? '' : [memoryNotes(agent.id), memoryFor(agent, report?.findings || []).text].filter(Boolean).join('\n\n');
   // Solo los últimos mensajes, para que cada pregunta no cueste cada vez más.
   const history = chatHistory(agent.id, 10).map((m) => ({ role: m.role, content: m.content }));
   while (history.length && history[0].role !== 'user') history.shift();

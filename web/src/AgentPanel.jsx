@@ -635,6 +635,51 @@ function RecentActivity({ agent, refreshKey, onOpen }) {
   );
 }
 
+// Lo que recuerda el agente: qué ha visto, cuántas veces y qué se hizo.
+function AgentMemory({ agent, refreshKey }) {
+  const [items, setItems] = useState(null);
+  const load = useCallback(() => {
+    api(`/agents/${agent.id}/memory`)
+      .then(setItems)
+      .catch(() => setItems([]));
+  }, [agent.id]);
+  useEffect(load, [load, refreshKey]);
+  if (!items?.length) return null;
+
+  async function forget(m) {
+    if (!confirm(`¿Olvidar "${m.title}"? ${agent.name} ya no recordará qué se hizo con esto.`)) return;
+    await api(`/memory/${m.id}`, { method: 'DELETE' }).catch(() => {});
+    load();
+  }
+
+  return (
+    <section>
+      <h3>Memoria</h3>
+      <ul className="memory-list">
+        {items.map((m) => (
+          <li key={m.id}>
+            <div className="row">
+              <strong>{m.title}</strong>
+              <button type="button" className="ghost small-btn" onClick={() => forget(m)} aria-label={`Olvidar ${m.title}`}>
+                Olvidar
+              </button>
+            </div>
+            <small className="muted">
+              {m.kind === 'problema' ? `Visto ${m.times} ${m.times === 1 ? 'vez' : 'veces'} · la última ${timeAgo(m.lastAt)}` : 'Sugerencia'}
+              {m.acknowledged ? ' · revisado, no se marca como problema' : ''}
+            </small>
+            {m.note && (
+              <p className="small">
+                {m.reviewedBy} ({timeAgo(m.reviewedAt)}): {m.note}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // De dónde lee el agente y con qué IA trabaja.
 function Sources({ agent }) {
   const s = agent.sources || {};
@@ -772,6 +817,7 @@ export default function AgentPanel({ agent, onBack, onRefresh, onOpen, ai }) {
         </>
       )}
 
+      {data && agent.floor !== 'negocio' && <AgentMemory agent={agent} refreshKey={`${agent.lastRun}-${reload}`} />}
       {data && <RecentActivity agent={agent} refreshKey={`${agent.lastRun}-${reload}`} onOpen={onOpen} />}
     </div>
   );

@@ -3,7 +3,7 @@ import { activeAgents, monitorAgentsOn } from './agents/index.js';
 import { collectHost } from './collectors/host.js';
 import { collectDocker } from './collectors/docker.js';
 import { collectWeb } from './collectors/web.js';
-import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard } from './db.js';
+import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardCard } from './db.js';
 import { diagnose, parseSuggestions, modelOf, aiEnabledFor } from './ai.js';
 import { sendReport, telegramEnabled, ICON } from './notify/telegram.js';
 import { watchedPages } from './agents-file.js';
@@ -41,6 +41,33 @@ function boardProblems(findings, events) {
   return [...mine, ...alerts].map(({ title, detail, severity }) => ({ key: boardKey(title), title, detail, severity }));
 }
 const boardSuggestions = (list) => list.map((title) => ({ key: boardKey(title), title, severity: 'info' }));
+
+const firstNumber = (title) => {
+  const n = title.match(/\d+(\.\d+)?/);
+  return n ? Number(n[0]) : null;
+};
+// Lo que alguien ya revisó deja de contar como problema mientras siga igual; si su número se dobla, vuelve a avisar.
+// Las alertas del monitor no se tocan: siempre llegan.
+function applyReviews(agentId, findings) {
+  const reviewed = reviewedKeys(agentId);
+  return findings.map((f) => {
+    const m = f.severity !== 'info' && !f.fromEvent ? reviewed.get(boardKey(f.title)) : null;
+    if (!m) return f;
+    const now = firstNumber(f.title);
+    if (now !== null && m.reviewedValue !== null && now > m.reviewedValue * 2)
+      return { ...f, detail: `Empeoró: estaba en ${m.reviewedValue} cuando ${m.reviewedBy} lo revisó (${m.note}). ${f.detail || ''}`.trim() };
+    return { ...f, severity: 'info', detail: `Ya revisado por ${m.reviewedBy}: ${m.note}` };
+  });
+}
+
+// El botón "Revisado" de la pizarra: el agente lo anota en su memoria y revisa de nuevo para actualizar su estado.
+export function reviewCard(card, note, user) {
+  saveReview({ agent: card.agent, kind: card.kind, key: card.key, title: card.title, note, user, value: firstNumber(card.title) });
+  removeBoardCard(card.id);
+  logActivity(card.agent, 'manual', `${user} marcó como revisado: ${card.title}. Lo anoté en mi memoria: ${note}`);
+  const agent = activeAgents().find((a) => a.id === card.agent);
+  if (agent && !working.has(agent.id)) runAgent(agent, createContext()).catch(() => null);
+}
 
 // Firma de los hallazgos importantes: si no cambia, reutilizamos el diagnóstico anterior de la IA.
 const signatureOf = (findings) =>
@@ -101,15 +128,19 @@ export async function runAgent(agent, ctx, input) {
   const started = Date.now();
   try {
     const log = (message, meta) => logActivity(agent.id, agent.schedule === 'manual' ? 'trabajo' : 'lectura', message, meta);
-    const { findings, metrics } = await agent.run({ ...ctx, log, input, agent });
+    const { findings: raw, metrics } = await agent.run({ ...ctx, log, input, agent });
+    const findings = agent.schedule === 'manual' ? raw : applyReviews(agent.id, raw);
     const status = statusOf(findings);
     const previous = latestReport(agent.id);
     const events = input?.events || [];
     // Lo que el agente recuerda de Obsidian. Si el dueño escribió algo nuevo en sus notas, la firma cambia
     // y se pide un diagnóstico nuevo que lo tenga en cuenta.
     const memory = agent.schedule === 'manual' ? { text: '', ownerKey: '' } : memoryFor(agent, findings, events);
+    // Su propia memoria también cuenta: si alguien revisó algo nuevo, se pide un diagnóstico que lo tenga en cuenta.
+    const notes = agent.schedule === 'manual' ? '' : memoryNotes(agent.id);
+    const lastReview = agent.schedule === 'manual' ? '' : [...reviewedKeys(agent.id).values()].map((m) => m.reviewedAt).sort().at(-1) || '';
     const problems = signatureOf(findings);
-    const report = { status, findings, metrics, aiSignature: problems && memory.ownerKey ? `${problems}|notas:${memory.ownerKey}` : problems, aiSummary: null };
+    const report = { status, findings, metrics, aiSignature: problems && (memory.ownerKey || lastReview) ? `${problems}|notas:${memory.ownerKey}|revisado:${lastReview}` : problems, aiSummary: null };
     logChanges(agent.id, previous, findings);
     // Alertas del monitor que motivaron esta revisión (las de recuperación no cuentan).
     const alerts = events.filter((e) => e.severity !== 'info');
@@ -130,7 +161,7 @@ export async function runAgent(agent, ctx, input) {
     } else if (goodNews) {
       // Una recuperación: se avisa sin diagnóstico.
     } else {
-      const answer = await diagnose(agent, report, memory.text).catch((err) => {
+      const answer = await diagnose(agent, report, [notes, memory.text].filter(Boolean).join('\n\n')).catch((err) => {
         console.error(`[ia] ${agent.id}:`, err.message);
         return null;
       });
@@ -146,10 +177,18 @@ export async function runAgent(agent, ctx, input) {
 
     saveReport(agent.id, report);
     if (agent.schedule !== 'manual') {
+      // Memoria: cuenta lo que apareció (otra vez) y da por terminado lo revisado que ya no está.
+      const seenBefore = new Set((previous?.findings || []).map((f) => boardKey(f.title)));
+      for (const p of boardProblems(raw, events)) if (!seenBefore.has(p.key)) rememberSeen(agent.id, p.key, p.title);
+      closeReviews(agent.id, new Set(raw.map((f) => boardKey(f.title))));
       syncBoard(agent.id, 'problema', boardProblems(findings, events));
       // Sin diagnóstico nuevo (la IA no respondió, una recuperación) quedan las sugerencias que ya estaban.
       if (!problems) syncBoard(agent.id, 'sugerencia', []);
-      else if (report.aiSuggestions) syncBoard(agent.id, 'sugerencia', boardSuggestions(report.aiSuggestions));
+      else if (report.aiSuggestions) {
+        // Lo que ya se marcó como hecho no vuelve a la pizarra.
+        const done = reviewedKeys(agent.id);
+        syncBoard(agent.id, 'sugerencia', boardSuggestions(report.aiSuggestions).filter((s) => !done.has(s.key)));
+      }
     }
     recordRun(agent, { report, previous, events }); // a Obsidian (si está configurado)
     const count = (sev) => findings.filter((f) => f.severity === sev).length;

@@ -109,6 +109,23 @@ db.exec(`
     dismissed_at TEXT,
     UNIQUE (agent, kind, key)
   );
+  -- La memoria de cada agente: qué problemas ha visto, cuántas veces y qué se hizo con ellos.
+  CREATE TABLE IF NOT EXISTS memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'problema',
+    key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    times INTEGER NOT NULL DEFAULT 1,
+    first_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_at TEXT NOT NULL DEFAULT (datetime('now')),
+    note TEXT,
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    reviewed_value REAL,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (agent, kind, key)
+  );
 `);
 
 // ---------- Reportes y alertas ----------
@@ -180,6 +197,52 @@ export function listBoard(agents) {
 }
 
 export const dismissBoard = (id) => db.prepare("UPDATE board SET dismissed_at = datetime('now') WHERE id = ? AND dismissed_at IS NULL").run(id).changes > 0;
+
+export const boardCard = (id) => db.prepare('SELECT * FROM board WHERE id = ?').get(id);
+export const removeBoardCard = (id) => db.prepare('DELETE FROM board WHERE id = ?').run(id);
+
+// ---------- Memoria de los agentes ----------
+
+// Un problema apareció (otra vez): suma una vez más.
+export function rememberSeen(agent, key, title) {
+  db.prepare(
+    `INSERT INTO memory (agent, key, title) VALUES (?, ?, ?)
+     ON CONFLICT (agent, kind, key) DO UPDATE SET times = times + 1, title = excluded.title, last_at = datetime('now')`,
+  ).run(agent, key, title);
+}
+
+// Alguien lo revisó: queda qué se hizo y, si el título trae un número, con cuánto estaba (para notar si empeora).
+export function saveReview({ agent, kind, key, title, note, user, value }) {
+  db.prepare(
+    `INSERT INTO memory (agent, kind, key, title, note, reviewed_by, reviewed_at, reviewed_value, acknowledged) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, 1)
+     ON CONFLICT (agent, kind, key) DO UPDATE SET title = excluded.title, note = excluded.note, reviewed_by = excluded.reviewed_by,
+       reviewed_at = excluded.reviewed_at, reviewed_value = excluded.reviewed_value, acknowledged = 1`,
+  ).run(agent, kind, key, title, note, user, value);
+}
+
+const MEMORY_COLUMNS = `id, agent, kind, key, title, times, first_at AS firstAt, last_at AS lastAt, note, reviewed_by AS reviewedBy,
+  reviewed_at AS reviewedAt, reviewed_value AS reviewedValue, acknowledged`;
+export const listMemory = (agent, limit = 30) =>
+  db.prepare(`SELECT ${MEMORY_COLUMNS} FROM memory WHERE agent = ? ORDER BY last_at DESC, id DESC LIMIT ?`).all(agent, limit);
+export const reviewedKeys = (agent) =>
+  new Map(db.prepare(`SELECT ${MEMORY_COLUMNS} FROM memory WHERE agent = ? AND acknowledged = 1`).all(agent).map((m) => [m.key, m]));
+
+// Lo revisado que ya no aparece se dio por terminado: si vuelve, se avisa de nuevo (y se recuerda qué se hizo).
+export function closeReviews(agent, stillThere) {
+  for (const { id, key } of db.prepare("SELECT id, key FROM memory WHERE agent = ? AND kind = 'problema' AND acknowledged = 1").all(agent))
+    if (!stillThere.has(key)) db.prepare('UPDATE memory SET acknowledged = 0 WHERE id = ?').run(id);
+}
+export const forgetMemory = (id) => db.prepare('DELETE FROM memory WHERE id = ?').run(id).changes > 0;
+
+// La memoria en texto, para la IA.
+export function memoryNotes(agent) {
+  return listMemory(agent)
+    .map((m) => {
+      const seen = m.kind === 'problema' ? `visto ${m.times} ${m.times === 1 ? 'vez' : 'veces'}, la última el ${m.lastAt}` : 'sugerencia';
+      return `- ${m.title}: ${seen}${m.reviewedAt ? `. ${m.reviewedBy} lo revisó el ${m.reviewedAt}: ${m.note}` : ''}`;
+    })
+    .join('\n');
+}
 
 // ---------- Registro de actividad ----------
 
