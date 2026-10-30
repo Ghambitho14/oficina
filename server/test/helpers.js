@@ -55,7 +55,9 @@ export async function startFakeMonitor() {
   const host = { cpuPct: 12, cpus: 2, uptimeSec: 86400, load1: 0.3, load5: 0.4, load15: 0.5, memPct: 41, swapPct: 3, memTotal: 8e9, memUsed: 3.3e9, swapTotal: 2e9, swapUsed: 6e7, diskTotal: 80e9, diskFree: 40e9, diskPct: 50 };
   const domains = [{ domain: 'example.com', path: '/', latencyMs: 120, ok: true, status: 200, certDays: 90, error: null }];
   // logs: líneas por id de contenedor. noLogsRoute: imita un monitor viejo, sin la ruta de logs.
-  const state = { down: false, requests: 0, logs: {}, logQueries: [], noLogsRoute: false, snort: 35 };
+  // snort: alertas de hoy; snortYesterday: las de ayer, que /api/snort sigue entregando.
+  const state = { down: false, requests: 0, logs: {}, logQueries: [], noLogsRoute: false, snort: 35, snortYesterday: 0 };
+  const snortAlert = (ts) => ({ ts, sid: '1', msg: 'ET SCAN', priority: 2, proto: 'TCP', src: '203.0.113.9', dst: '198.51.100.1', dstPort: 443 });
 
   const json = (res, body, code = 200) => {
     res.writeHead(code, { 'content-type': 'application/json' });
@@ -78,6 +80,10 @@ export async function startFakeMonitor() {
       return json(res, { id: logsOf, lines: state.logs[logsOf] || [] });
     }
     if (url.pathname === '/api/snort/summary') return json(res, { hours: 24, n: state.snort, sources: 4, topSources: [{ src: '203.0.113.9', n: 20 }], topRules: [{ msg: 'ET SCAN', n: 30 }] });
+    if (url.pathname === '/api/snort') {
+      const list = [...Array(state.snort).fill(Date.now()), ...Array(state.snortYesterday).fill(Date.now() - 86_400_000)];
+      return json(res, { alerts: list.slice(0, Number(url.searchParams.get('limit') || 50)).map(snortAlert), health: {} });
+    }
     json(res, { error: 'not found' }, 404);
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

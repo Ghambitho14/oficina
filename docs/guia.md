@@ -90,7 +90,8 @@ ninguna se cae si la otra falla. Si pones `MONITOR_URL`, se conectan así:
   `alertas` de `agentes.json` (contenedores, host y dominios → Ana; Snort y certificados → Leo). El agente se
   levanta, pide al monitor el estado actual, escribe su diagnóstico, lo deja en la pizarra y te manda el reporte
   por Telegram. Con `AGENT_MODE=alertas` (por defecto con monitor) **solo trabajan cuando llega una
-  alerta o se lo pides**; el temporizador solo guarda muestras para las gráficas.
+  alerta o se lo pides**; el temporizador solo guarda muestras para las gráficas. La excepción es Leo, que revisa
+  una vez al empezar el día: Snort se cuenta por día, y así lo de ayer deja de verse aunque no llegue otra alerta.
 - Telegram: el monitor manda la alerta en bruto, al instante. La Oficina solo manda cambios de estado y
   diagnósticos nuevos de la IA, para no repetir.
 - Si el monitor deja de responder (3 intentos seguidos), Ana lo avisa en la pizarra y por Telegram.
@@ -109,7 +110,8 @@ La sección **Pizarra** muestra lo que los agentes tienen pendiente ahora: sus *
 IA (hasta 3 por agente). Al terminar cada revisión, el agente pone lo nuevo y quita lo que ya se solucionó; el historial
 queda en Actividad. El botón **Quitar** esconde una tarjeta que ya viste: sigue escondida mientras el problema exista y,
 si se soluciona y vuelve, sale de nuevo. Con `AGENT_MODE=alertas` los agentes no revisan solos, así que una tarjeta se
-quita cuando llega la alerta de recuperación o cuando pides **Revisar ahora**.
+quita cuando llega la alerta de recuperación o cuando pides **Revisar ahora**. La de Snort cuenta solo las alertas de hoy
+(según `TIMEZONE`): se quita sola a los pocos minutos de medianoche y vuelve únicamente si se repite.
 
 ### La memoria de los agentes
 

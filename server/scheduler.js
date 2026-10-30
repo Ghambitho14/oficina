@@ -7,7 +7,7 @@ import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChec
 import { diagnose, parseSuggestions, modelOf, aiEnabledFor } from './ai.js';
 import { sendReport, telegramEnabled, ICON } from './notify/telegram.js';
 import { watchedPages } from './agents-file.js';
-import { monitorEnabled, fetchOverview, toHost, toContainers, toSites, eventTitle } from './collectors/monitor.js';
+import { monitorEnabled, fetchOverview, toHost, toContainers, toSites, eventTitle, dayOf } from './collectors/monitor.js';
 import { recordRun, memoryFor } from './vault.js';
 import { sshEnabled, sshQuery } from './collectors/ssh.js';
 
@@ -299,10 +299,22 @@ export async function runAll({ manual = false } = {}) {
   }
 }
 
-// En modo "alertas" los agentes no revisan solos: el temporizador solo guarda muestras para las gráficas
-// y ellos trabajan cuando llega una alerta del monitor o alguien pide una revisión.
+// Lo que se cuenta por día vuelve a cero a medianoche. En modo "alertas" nadie revisaría hasta la siguiente alerta y lo
+// de ayer seguiría a la vista: esos agentes revisan una vez al empezar el día.
+let today = dayOf();
+export async function reviewNewDay(now = Date.now()) {
+  const agents = activeAgents().filter((a) => a.daily);
+  if (dayOf(now) === today || agents.some((a) => working.has(a.id))) return;
+  today = dayOf(now);
+  const ctx = createContext();
+  await Promise.all(agents.map((a) => runAgent(a, ctx).catch(() => null)));
+}
+
+// En modo "alertas" los agentes no revisan solos: el temporizador guarda muestras para las gráficas
+// y ellos trabajan cuando llega una alerta del monitor, alguien pide una revisión o empieza el día (reviewNewDay).
 async function sampleOnly() {
   if (!monitorAgentsOn()) return;
+  await reviewNewDay();
   await saveSamples(createContext()).catch((err) => console.error('[muestras]', err.message));
   prune();
 }

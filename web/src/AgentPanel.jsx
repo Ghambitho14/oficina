@@ -124,7 +124,7 @@ function CiberseguridadMetrics({ m }) {
       )}
       {m.snort && (
         <section>
-          <h3>Snort (últimas 24 h, vía monitor)</h3>
+          <h3>Snort (hoy, vía monitor)</h3>
           <p>
             <strong>{m.snort.n}</strong> alertas desde <strong>{m.snort.sources}</strong> orígenes
           </p>
@@ -387,7 +387,7 @@ const FACTS = {
   ciberseguridad: (m) => {
     const out = [];
     if (m.snort) {
-      out.push({ label: 'Alertas de Snort (24 h)', value: m.snort.n, tone: '' });
+      out.push({ label: 'Alertas de Snort hoy', value: m.snort.n, tone: '' });
       out.push({ label: 'Orígenes distintos', value: m.snort.sources, tone: '' });
     }
     if (m.certificates?.length) {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { collectSsh, parseSsh } from '../collectors/sshlog.js';
 import { collectPorts, parseSs } from '../collectors/ports.js';
-import { fetchSnort, eventFinding } from '../collectors/monitor.js';
+import { fetchSnortToday, eventFinding } from '../collectors/monitor.js';
 
 // Ej.: "5 updates can be applied immediately. 2 of these updates are standard security updates."
 export function parseUpdates(text) {
@@ -36,6 +36,7 @@ export default {
   id: 'ciberseguridad',
   floor: 'infra',
   schedule: 'auto',
+  daily: true, // Snort cuenta lo de hoy: revisa solo al empezar el día (ver scheduler.js)
 
   async run(ctx) {
     const t = ctx.agent.watch; // sus umbrales: "vigila" en agentes.json
@@ -91,14 +92,14 @@ export default {
     if (updates?.security) add('warn', `${updates.security} actualizaciones de seguridad pendientes`, `Ejecuta "sudo apt update && sudo apt upgrade" en ${config.brand.server}.`);
     if (updates?.reboot) add('info', `${config.brand.server} necesita reiniciarse`, 'Alguna actualización (kernel o librerías) se aplica recién al reiniciar.');
 
-    // Snort (detector de intrusos) lo sigue el monitor: aquí se mira el resumen de 24 h.
-    const snort = ctx.monitor ? await fetchSnort(24).catch(() => null) : null;
+    // Snort (detector de intrusos) lo sigue el monitor: aquí se mira lo de hoy. Lo de ayer ya no avisa, salvo que se repita.
+    const snort = ctx.monitor ? await fetchSnortToday().catch(() => null) : null;
     if (snort) {
-      ctx.log(`Revisé Snort (vía monitor): ${snort.n || 0} alertas de ${snort.sources || 0} orígenes en 24 h`);
+      ctx.log(`Revisé Snort (vía monitor): ${snort.n || 0} alertas de ${snort.sources || 0} orígenes hoy`);
       if ((snort.n || 0) >= t.alertasSnort)
         add(
           'warn',
-          `${snort.n} alertas de Snort en 24 h`,
+          `${snort.n} alertas de Snort hoy`,
           [
             snort.topSources?.length && `Orígenes: ${snort.topSources.slice(0, 3).map((s) => `${s.src} (${s.n})`).join(', ')}`,
             snort.topRules?.length && `Reglas: ${snort.topRules.slice(0, 3).map((r) => `${r.msg} (${r.n})`).join(', ')}`,

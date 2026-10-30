@@ -164,7 +164,7 @@ export const config = {
     disk: num(process.env.DISK_WARN, 85),
     sslDays: num(process.env.SSL_WARN_DAYS, 14),
     sshFails: num(process.env.SSH_FAILS_WARN, 50),
-    // Alertas de Snort en 24 h (vía monitor) para avisar.
+    // Alertas de Snort en el día (vía monitor) para avisar.
     snortAlerts: num(process.env.SNORT_ALERTS_WARN, 20),
     slowMs: num(process.env.SLOW_MS, 2000),
     logErrors: num(process.env.LOG_ERRORS_WARN, 20),

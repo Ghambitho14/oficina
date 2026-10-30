@@ -92,7 +92,7 @@ test('una revisión pedida manda el informe aunque nada cambie, y sin mirar el m
   assert.equal((await oficina.api('POST', '/agents/ciberseguridad/run')).status, 202);
   const msg = await waitFor(() => telegram.messages.slice(before).find((m) => m.text.includes('Leo')), 'el informe de Leo');
   assert.ok(msg.text.startsWith('🟡'), msg.text);
-  assert.match(msg.text, /Qué pasa: 35 alertas de Snort en 24 h/);
+  assert.match(msg.text, /Qué pasa: 35 alertas de Snort hoy/);
   assert.match(msg.fileName, /^leo-.*\.md$/);
   assert.match(msg.document, /Orígenes: 203\.0\.113\.9/);
   await waitFor(async () => (await activity(oficina)).some((a) => a.agent === 'ciberseguridad' && a.kind === 'telegram'), 'el registro del envío');

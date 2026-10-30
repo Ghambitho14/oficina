@@ -30,7 +30,35 @@ export async function lastEventId() {
 export const fetchOverview = () => get('/api/overview');
 export const fetchSnort = (hours = 24) => get(`/api/snort/summary?hours=${hours}`);
 
-const gb = (bytes) => Math.round((bytes / 1024 ** 3) * 10) / 10;
+// El día en la zona de la Oficina: dos momentos con el mismo texto son del mismo día.
+const DAY = new Intl.DateTimeFormat('sv-SE', { timeZone: config.timezone, dateStyle: 'short' });
+const CLOCK = new Intl.DateTimeFormat('en-GB', { timeZone: config.timezone, timeStyle: 'short' });
+export const dayOf = (ts = Date.now()) => DAY.format(ts);
+
+function tally(alerts, key) {
+  const counts = new Map();
+  for (const a of alerts) counts.set(a[key], (counts.get(a[key]) || 0) + 1);
+  return [...counts].map(([value, n]) => ({ [key]: value, n })).sort((a, b) => b.n - a.n);
+}
+
+const SNORT_LIST_MAX = 500; // lo máximo que entrega /api/snort
+
+// Las alertas de Snort de hoy, con la forma del resumen del monitor. El resumen solo no alcanza: mira al menos una hora
+// atrás, y justo después de medianoche traería lo de ayer.
+export async function fetchSnortToday(now = Date.now()) {
+  const { alerts } = await get(`/api/snort?limit=${SNORT_LIST_MAX}`);
+  const today = dayOf(now);
+  const list = alerts.filter((a) => dayOf(a.ts) === today);
+  if (list.length < SNORT_LIST_MAX) {
+    const topSources = tally(list, 'src');
+    return { n: list.length, sources: topSources.length, topSources, topRules: tally(list, 'msg') };
+  }
+  // Un día con más de 500 corta la lista: el total sale del resumen, desde medianoche.
+  const [h, m] = CLOCK.format(now).split(':').map(Number);
+  return fetchSnort(Math.max(h + m / 60, 1));
+}
+
+const gb =(bytes) => Math.round((bytes / 1024 ** 3) * 10) / 10;
 const mb = (bytes) => Math.round(bytes / 1024 ** 2);
 
 // Traduce los datos del monitor a la misma forma que usan los collectors locales,

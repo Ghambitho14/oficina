@@ -17,7 +17,7 @@ const WATCH = {
   paginaLentaMs: ['Página lenta desde', 'ms'],
   apiLentaMs: ['API lenta desde', 'ms'],
   intentosSsh: ['Intentos SSH fallidos (24 h) para avisar', ''],
-  alertasSnort: ['Alertas de Snort (24 h) para avisar', ''],
+  alertasSnort: ['Alertas de Snort en el día para avisar', ''],
   diasCertificado: ['Avisa si el certificado vence en', 'días'],
   puertosPermitidos: ['Puertos permitidos', ''],
   errores: ['Errores de log para avisar', ''],

@@ -22,7 +22,7 @@ after(async () => {
 
 const board = async () => (await oficina.api('GET', '/board')).body;
 const cards = async (text) => (await board()).filter((b) => b.title.includes(text));
-const finished = async (agent) => (await activity(oficina)).filter((a) => a.agent === agent && a.kind === 'fin').length;
+const finished = async (agent) => (await activity(oficina, 500)).filter((a) => a.agent === agent && a.kind === 'fin').length;
 // Manda una alerta y espera a que el agente termine de revisarla.
 async function alert(event, agent = 'informatica') {
   const done = await finished(agent);
@@ -119,6 +119,17 @@ test('si se va y vuelve, cuenta otra vez y avisa de nuevo', async () => {
   const again = (await memory()).find((x) => x.id === before.id);
   assert.equal(again.times, before.times + 1);
   assert.equal(again.note, 'Escaneos normales, sin riesgo');
+});
+
+test('lo de ayer no cuenta: la tarjeta se va y vuelve solo si se repite hoy', async () => {
+  monitor.state.snort = 0;
+  monitor.state.snortYesterday = 405;
+  await leoReviews();
+  assert.equal((await cards('alertas de Snort')).length, 0);
+  assert.equal((await leo()).metrics.snort.n, 0);
+  monitor.state.snort = 35;
+  await leoReviews();
+  assert.match((await cards('alertas de Snort'))[0].title, /^35 alertas de Snort hoy/);
 });
 
 test('un recuerdo se puede olvidar', async () => {
