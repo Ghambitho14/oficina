@@ -585,6 +585,12 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .agent-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .agent-facts .chip { display: inline-block; margin: 0 4px 4px 0; }
 .watch-list { margin: 0; padding-left: 18px; }
+.ajustes .warn-text { color: var(--warn); }
+.provider-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 0.88rem; }
+.provider-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ajustes label.field { display: grid; gap: 4px; font-size: 0.88rem; color: var(--muted); }
+.ajustes label.field select, .model-field select { width: 100%; max-width: 420px; }
+.model-field { display: grid; gap: 4px; justify-items: start; }
 .code-block { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; font-size: 0.8rem; }
 @media (max-width: 480px) {
   .agent-facts { grid-template-columns: 1fr; gap: 2px; }

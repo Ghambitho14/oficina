@@ -52,8 +52,17 @@ export function baseOf() {
 }
 
 // ---------- Validación ----------
-const KEYS = ['tipo', 'activo', 'nombre', 'puesto', 'descripcion', 'personalidad', 'contexto', 'color', 'pelo', 'piel', 'modelo', 'tokensDiarios', 'alertas', 'vigila', 'telegram'];
-const TEXT = { nombre: 30, puesto: 40, descripcion: 300, personalidad: 1000, contexto: 2000, modelo: 120 };
+const KEYS = ['tipo', 'activo', 'nombre', 'puesto', 'descripcion', 'personalidad', 'contexto', 'guia', 'color', 'pelo', 'piel', 'modelo', 'tokensDiarios', 'alertas', 'vigila', 'telegram'];
+const TEXT = { nombre: 30, puesto: 40, descripcion: 300, personalidad: 1000, contexto: 2000, guia: 200, modelo: 120 };
+const GUIDE_MAX = 6000; // los modelos locales tienen poco contexto
+
+// La guía de un agente (su "guia" en el archivo): un .md junto a agentes.json. null si la ruta sale de esa carpeta.
+function guidePath(file) {
+  const dir = path.dirname(config.agentsFile);
+  const full = path.resolve(dir, file);
+  const rel = path.relative(dir, full);
+  return !file.trim() || path.isAbsolute(file) || path.isAbsolute(rel) || rel.split(path.sep)[0] === '..' ? null : full;
+}
 
 function checkAgent(id, a, puestos) {
   const at = `agentes.${id}`;
@@ -68,6 +77,7 @@ function checkAgent(id, a, puestos) {
     if (a[k].length > max) return `${at}.${k} admite máximo ${max} caracteres`;
   }
   if (a.nombre !== undefined && !a.nombre.trim()) return `${at}.nombre no puede quedar vacío`;
+  if (a.guia && !guidePath(a.guia)) return `${at}.guia debe ser un archivo dentro de la carpeta de agentes.json, p. ej. "guias/marca.md"`;
   for (const k of ['color', 'pelo', 'piel']) if (a[k] && !HEX.test(a[k])) return `${at}.${k} debe ser un color como #3b82f6`;
   if (a.tokensDiarios !== undefined && a.tokensDiarios !== 0 && (!Number.isInteger(a.tokensDiarios) || a.tokensDiarios < 1000))
     return `${at}.tokensDiarios debe ser 0 (sin tope propio) o un entero de al menos 1000`;
@@ -87,6 +97,19 @@ function checkAgent(id, a, puestos) {
     if (a.telegram.minimo !== undefined && !SEVERITIES.includes(a.telegram.minimo)) return `${at}.telegram.minimo debe ser "ok", "warn" o "crit"`;
   }
   return null;
+}
+
+// Una guía que falta o es muy larga solo avisa: el agente sigue trabajando.
+function readGuide(id, file, warnings) {
+  if (!file) return '';
+  try {
+    const guide = fs.readFileSync(guidePath(file), 'utf8').replace(/^\uFEFF/, '').trim();
+    if (guide.length > GUIDE_MAX) warnings.push(`agentes.${id}: la guía tiene más de ${GUIDE_MAX} caracteres, solo se usa el comienzo`);
+    return guide.slice(0, GUIDE_MAX);
+  } catch {
+    warnings.push(`agentes.${id}: no encontré la guía "${file}"`);
+    return '';
+  }
 }
 
 // Junta la base y el archivo. Devuelve { data } o { error }; las claves desconocidas solo avisan.
@@ -121,6 +144,7 @@ function build(user, puestos, check) {
     };
     // Un agente nuevo sin nombre propio no puede llamarse igual que el de la plantilla.
     if (mine && id !== merged[id].tipo && !mine.nombre) return { error: `agentes.${id}: ponle un "nombre" propio` };
+    merged[id].guide = readGuide(id, merged[id].guia, warnings);
   }
   const data = {
     paginas: user.paginas ?? base.paginas ?? [],
@@ -143,9 +167,20 @@ export function setRules({ puestos, check }) {
   stamp = null;
 }
 
-let stamp = null; // fecha del archivo de la última lectura
+let stamp = null; // fecha del archivo y de sus guías en la última lectura
 let good = null; // la última versión válida
 const fileStatus = { path: config.agentsFile, exists: false, ok: true, error: null, warnings: [], loadedAt: null };
+
+function guidesStamp() {
+  return (good?.agentes ?? []).filter((a) => a.guia).map((a) => {
+    try {
+      const s = fs.statSync(guidePath(a.guia));
+      return `${s.mtimeMs}:${s.size}`;
+    } catch {
+      return 'sin-guia';
+    }
+  });
+}
 
 function readUser() {
   let stat = null;
@@ -154,7 +189,7 @@ function readUser() {
   } catch {
     // no existe: se usa la plantilla
   }
-  const key = stat ? `${stat.mtimeMs}:${stat.size}` : 'sin-archivo';
+  const key = [stat ? `${stat.mtimeMs}:${stat.size}` : 'sin-archivo', ...guidesStamp()].join('|');
   if (key === stamp && good) return;
   stamp = key;
   fileStatus.exists = Boolean(stat);
@@ -169,6 +204,7 @@ function readUser() {
   const result = build(user, puestoIds, checker);
   if (result.error) return fail(result.error);
   good = result.data;
+  stamp = [stamp.split('|')[0], ...guidesStamp()].join('|');
   Object.assign(fileStatus, { ok: true, error: null, warnings: result.warnings, loadedAt: new Date().toISOString() });
 }
 

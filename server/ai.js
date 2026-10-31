@@ -3,14 +3,39 @@
 // Cada llamada guarda sus tokens y su costo estimado, y respeta un tope diario para no gastar de más.
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
-import { recordUsage, tokensSince, logActivity, latestReport, chatHistory, getSetting, memoryNotes } from './db.js';
+import { recordUsage, tokensSince, logActivity, latestReport, chatHistory, getSetting, setSetting, memoryNotes } from './db.js';
 import { memoryFor } from './vault.js';
 import { agentApiKey, apiKeyVar } from './agent-keys.js';
-import { QUERIES, sshEnabled, sshQuery } from './collectors/ssh.js';
+import { QUERIES, TARGETS, queriesFor, sshEnabled, sshQuery } from './collectors/ssh.js';
 import { resolveModel, providerReady, openaiChat } from './providers.js';
 
-// El modelo de un agente: el que eligió en el panel, o el general de su puesto (el buscador usa LEADS_MODEL).
-export const modelOf = (agent, override) => override || agent?.model || agent?.defaultModel || config.ai.model;
+// ---------- Modelos elegidos en Ajustes › IA ----------
+// Se guardan en la base y mandan sobre AI_MODEL y el "modelo" de agentes.json: así se cambia de modelo (o de API)
+// desde el panel, sin reiniciar. Sin elegir nada, vale lo del .env y el archivo.
+export function chosenModels() {
+  try {
+    const saved = JSON.parse(getSetting('aiModels') || '{}');
+    return { general: saved.general || '', agents: saved.agents || {} };
+  } catch {
+    return { general: '', agents: {} };
+  }
+}
+
+// `target` es "general" o el id de un agente; model vacío vuelve a lo del .env o el archivo.
+export function setChosenModel(target, model) {
+  const chosen = chosenModels();
+  if (target === 'general') chosen.general = model;
+  else if (model) chosen.agents[target] = model;
+  else delete chosen.agents[target];
+  setSetting('aiModels', JSON.stringify(chosen));
+}
+
+// El modelo general: el elegido en el panel o AI_MODEL.
+export const generalModel = () => chosenModels().general || config.ai.model;
+
+// El modelo de un agente: el elegido en el panel, el de agentes.json, el de su puesto (el buscador usa LEADS_MODEL)
+// o el general.
+export const modelOf = (agent, override) => override || chosenModels().agents[agent?.id] || agent?.model || agent?.defaultModel || generalModel();
 
 // Con qué proveedor y key trabaja un agente: su key propia para ese proveedor (AGENT_<ID>_…) o la general.
 export function routeFor(agent, override) {
@@ -22,8 +47,8 @@ export function routeFor(agent, override) {
 }
 
 // Qué falta para que un agente tenga IA, en palabras para el panel.
-export function missingFor(agent) {
-  const { provider } = routeFor(agent);
+export function missingFor(agent, override) {
+  const { provider } = routeFor(agent, override);
   const own = provider.keyVar && apiKeyVar(agent.keyId || agent.id, provider.id);
   if (!provider.url && provider.urlVar && !provider.keyVar) return `falta ${provider.urlVar}`;
   if (!provider.url && provider.urlVar) return `falta ${provider.urlVar} u ${provider.keyVar}`;
@@ -53,12 +78,15 @@ export const aboutBusiness = () =>
   `${brand.org || 'El negocio'} todavía no tiene descripción. Trabaja con algo general y sugiere completar "Sobre tu negocio" en el panel.`;
 
 // La personalidad y el contexto que el dueño le dio al agente en agentes.json. La personalidad solo cambia la forma
-// de hablar y el contexto son datos que debe tener en cuenta: ninguno cambia sus reglas ni lo que puede hacer.
+// de hablar, el contexto y la guía son datos que debe tener en cuenta: ninguno cambia sus reglas ni lo que puede hacer.
 export const personaOf = (agent) =>
   (agent.persona ? `
 Cómo quiere el dueño que te expreses (no cambia tus reglas ni lo que puedes hacer): ${agent.persona}` : '') +
   (agent.context ? `
-Lo que el dueño quiere que sepas de su servidor y su negocio (tenlo en cuenta, pero no cambia tus reglas): ${agent.context}` : '');
+Lo que el dueño quiere que sepas de su servidor y su negocio (tenlo en cuenta, pero no cambia tus reglas): ${agent.context}` : '') +
+  (agent.guide ? `
+Guía de trabajo del dueño (síguela al pie de la letra, pero no cambia tus reglas ni lo que puedes hacer):
+${agent.guide}` : '');
 
 const PURPOSES = { diagnostico: 'el diagnóstico', chat: 'responder en el chat', ideas: 'generar ideas', clientes: 'buscar clientes' };
 
@@ -74,6 +102,8 @@ export function budget() {
 }
 
 function costOf({ model, provider, name }, u, webSearches) {
+  // OpenCode dice lo que costó de verdad (con Go, lo que se descontó del plan): no hace falta estimarlo.
+  if (typeof u.cost_usd === 'number') return u.cost_usd;
   const { ai } = config;
   const [pin, pout] =
     provider.kind !== 'anthropic' ? provider.price || [0, 0] : model === ai.model ? [ai.priceIn, ai.priceOut] : ai.prices[name] || [ai.priceIn, ai.priceOut];
@@ -85,7 +115,7 @@ function costOf({ model, provider, name }, u, webSearches) {
 // para los demás proveedores se traducen (ver providers.js).
 export async function callAi({ agent, purpose, model: override, ...params }) {
   const route = routeFor(agent, override);
-  if (!route.ready) throw new AiUnavailable(`La IA está apagada para ${agent.name} (modelo ${route.model}): ${missingFor({ ...agent, model: route.model })}.`);
+  if (!route.ready) throw new AiUnavailable(`La IA está apagada para ${agent.name} (modelo ${route.model}): ${missingFor(agent, override)}.`);
   // La búsqueda web corre en los servidores de Anthropic: con otro proveedor no hay cómo.
   if (route.provider.kind !== 'anthropic' && params.tools?.some((t) => t.type?.startsWith('web_search')))
     throw new AiUnavailable(`${agent.name} busca en la web y eso solo lo hacen los modelos de Claude. Elige uno en Ajustes › Agentes.`);
@@ -101,7 +131,10 @@ export async function callAi({ agent, purpose, model: override, ...params }) {
 
   const { model, provider, name, key } = route;
   const response =
-    provider.kind === 'anthropic' ? await claudeClient(key).messages.create({ ...params, model: name }) : await openaiChat(provider, key, name, params);
+    provider.kind === 'anthropic'
+      ? await claudeClient(key).messages.create({ ...params, model: name })
+      : // Una sesión fija por agente y para qué se usa: la conversación del chat, los diagnósticos, etc.
+        await openaiChat(provider, key, name, params, { session: `oficina-${agent.id}-${purpose}` });
 
   const u = response.usage;
   const webSearches = u.server_tool_use?.web_search_requests ?? 0;
@@ -160,6 +193,19 @@ const memoryBlock = (memory) =>
   memory
     ? `\n\nTu memoria (lo que pasó antes, qué se revisó y lo que escribió el dueño; datos sensibles ocultos):\n${redact(memory)}`
     : '';
+// Quién es el agente y qué sabe de su oficio ("expertise" de su puesto, en agents/<puesto>.js).
+const whoIs = (agent) =>
+  (agent.floor === 'negocio'
+    ? `Eres ${agent.name}, del área de negocio${ofOrg} (${agent.role}). Tu trabajo: ${agent.description}`
+    : `Eres ${agent.name}, a cargo de ${agent.role} en la oficina virtual${ofOrg} que vigila ${serverText}. Tu trabajo: ${agent.description}`) +
+  (agent.expertise ? `\n${agent.expertise}` : '');
+const GROUNDING =
+  '- Usa solo lo que está en tu reporte, en tu memoria y en lo que consultes. Si falta un dato, dilo y di cómo conseguirlo: ' +
+  'nunca inventes cifras, nombres de contenedores, IPs ni rutas.';
+const ACTIONS =
+  '- Solo observas: nunca ejecutas nada. Los comandos son para que el dueño los corra a mano: primero uno que confirme el ' +
+  'problema (solo lectura) y después el que lo arregla, avisando si reinicia, borra o corta un servicio.' +
+  (brand.stack ? ` Las apps se despliegan con ${brand.stack}: si hay que reiniciar o redeployar, dilo primero desde ${brand.stack}.` : '');
 const MEMORY_RULE =
   ' Si tu memoria muestra que esto ya pasó, dilo (cuántas veces y qué se hizo). Si el dueño escribió que algo es intencional ' +
   'o que ya lo arregló, respétalo y no lo trates como urgente. Si algo ya revisado se repite, recuerda qué se hizo la vez anterior ' +
@@ -168,27 +214,32 @@ const MEMORY_RULE =
 // ---------- Consultas por SSH ----------
 // Si hay SSH_HOST, los agentes de infraestructura pueden pedir más datos del servidor mientras diagnostican o
 // responden en el chat. Solo eligen una consulta de la lista fija (collectors/ssh.js): nunca escriben un comando.
-// Las herramientas solo las entiende Claude: con otro proveedor el agente trabaja sin consultas.
-const canQuery = (agent) =>
-  sshEnabled() && agent.floor !== 'negocio' && config.ssh.aiQueries > 0 && routeFor(agent).provider.kind === 'anthropic';
-const SSH_TOOL = {
-  name: 'consultar_servidor',
-  description:
-    `Ejecuta en ${serverText} una consulta de SOLO LECTURA de una lista fija y devuelve su salida (datos sensibles ocultos). ` +
-    'Úsala solo si tu reporte no alcanza para responder; cada consulta cuesta tiempo y tokens. Consultas: ' +
-    Object.entries(QUERIES)
-      .map(([name, what]) => `${name} (${what})`)
-      .join('; '),
-  input_schema: {
-    type: 'object',
-    properties: { consulta: { type: 'string', enum: Object.keys(QUERIES), description: 'Nombre de la consulta' } },
-    required: ['consulta'],
-  },
+// Cada agente ve solo las suyas (queriesFor): Leo todas, el resto las básicas. Claude y los compatibles con OpenAI
+// entienden la herramienta (providers.js la traduce).
+const canQuery = (agent) => sshEnabled() && agent.floor !== 'negocio' && config.ssh.aiQueries > 0;
+const sshTool = (agent) => {
+  const names = queriesFor(agent);
+  const withTarget = names.filter((n) => Object.hasOwn(TARGETS, n));
+  return {
+    name: 'consultar_servidor',
+    description:
+      `Ejecuta en ${serverText} una consulta de SOLO LECTURA de una lista fija y devuelve su salida (datos sensibles ocultos). ` +
+      'Úsala solo si tu reporte no alcanza para responder; cada consulta cuesta tiempo y tokens. Consultas: ' +
+      names.map((n) => `${n} (${QUERIES[n]})`).join('; '),
+    input_schema: {
+      type: 'object',
+      properties: {
+        consulta: { type: 'string', enum: names, description: 'Nombre de la consulta' },
+        ...(withTarget.length && { objetivo: { type: 'string', description: `Solo para ${withTarget.join(' y ')}: la IP o el nombre exacto del contenedor` } }),
+      },
+      required: ['consulta'],
+    },
+  };
 };
 const sshRule = (agent) =>
   canQuery(agent)
-    ? ` Si te falta un dato, puedes usar consultar_servidor (solo lectura, máximo ${config.ssh.aiQueries} consultas); ` +
-      'di qué consultaste. Sigues sin poder cambiar nada en el servidor.'
+    ? `\n- Si te falta un dato del servidor, usa consultar_servidor (solo lectura, máximo ${config.ssh.aiQueries} consultas) ` +
+      'en vez de suponer, y di qué consultaste. Sigues sin poder cambiar nada.'
     : '';
 const MAX_OUTPUT = 6000; // caracteres de salida por consulta que se mandan a la IA (lo más nuevo, que va al final)
 const tokensOf = (u) => u.input_tokens + u.output_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
@@ -201,27 +252,36 @@ async function callWithServer(agent, params) {
     return { response, tokens: tokensOf(response.usage) };
   }
   const messages = [...params.messages];
+  const tool = sshTool(agent);
+  const allowed = queriesFor(agent);
   let tokens = 0;
   let used = 0;
   for (;;) {
     // Al llegar al tope se le pide responder con lo que ya tiene.
     const done = used >= config.ssh.aiQueries;
-    const response = await callAi({ agent, ...params, messages, tools: [SSH_TOOL], ...(done && { tool_choice: { type: 'none' } }) });
+    const response = await callAi({ agent, ...params, messages, tools: [tool], ...(done && { tool_choice: { type: 'none' } }) });
     tokens += tokensOf(response.usage);
     if (response.stop_reason !== 'tool_use' || done) return { response, tokens };
 
     const results = [];
     for (const block of response.content.filter((b) => b.type === 'tool_use')) {
       const name = block.input?.consulta;
-      const out = ++used > config.ssh.aiQueries ? Promise.reject(new Error('llegaste al tope de consultas')) : sshQuery(name);
+      const target = Object.hasOwn(TARGETS, name) ? String(block.input?.objetivo ?? '').trim() : undefined;
+      const label = target ? `${name} ${target}` : name;
+      const out =
+        ++used > config.ssh.aiQueries
+          ? Promise.reject(new Error('llegaste al tope de consultas'))
+          : !allowed.includes(name)
+            ? Promise.reject(new Error(`${name} no está entre tus consultas`))
+            : sshQuery(name, target);
       results.push(
         await out.then(
           (text) => {
-            logActivity(agent.id, 'lectura', `Consulté ${brand.server} por SSH: ${name}`);
+            logActivity(agent.id, 'lectura', `Consulté ${brand.server} por SSH: ${label}`);
             return { type: 'tool_result', tool_use_id: block.id, content: redact(text.slice(-MAX_OUTPUT)).trim() || '(sin salida)' };
           },
           (err) => {
-            logActivity(agent.id, 'error', `No pude consultar ${brand.server} por SSH (${name}): ${err.message}`);
+            logActivity(agent.id, 'error', `No pude consultar ${brand.server} por SSH (${label}): ${err.message}`);
             return { type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true };
           },
         ),
@@ -254,15 +314,27 @@ export async function diagnose(agent, report, memory = '') {
     max_tokens: 2000,
     output_config: { effort: 'low' },
     system:
-      `Eres ${agent.name}, agente de ${agent.role} en la oficina que vigila ${serverText}. ` +
-      'Solo observas: nunca ejecutas nada. Escribe en español, claro para un programador junior. ' +
-      'Responde en texto plano con: 1) un resumen de 2-3 frases del estado, ' +
-      '2) hasta 3 acciones concretas priorizadas (con el comando a ejecutar manualmente si aplica). ' +
-      'Si todo está bien, dilo en una frase. No inventes datos que no estén en el reporte. ' +
-      'Si hay algo que mejorar, termina con una línea que diga exactamente "SUGERENCIAS:" y debajo hasta 3 sugerencias de una ' +
-      'línea cada una, empezando con "- ". Van a la pizarra de la oficina: que sean breves y concretas.' +
-      (memory ? MEMORY_RULE : '') +
+      `${whoIs(agent)}\n\n` +
+      'Ahora lees el reporte de tu última revisión y le dices al dueño, un programador junior, qué pasa y qué hacer. ' +
+      'Lo lee en el panel y en Telegram, muchas veces desde el celular: tiene que entenderlo en 30 segundos.\n\n' +
+      'Cómo trabajas:\n' +
+      `${GROUNDING}\n` +
+      '- Prioriza por gravedad: crit antes que warn. Los info solo si cambian lo que hay que hacer. Las alertas del monitor ' +
+      '(fromEvent) son el motivo de esta revisión: van primero.\n' +
+      '- Busca la causa, no repitas los síntomas: si varios hallazgos vienen de lo mismo, trátalos como un solo problema.\n' +
+      '- Si la causa no es segura, dilo: "probablemente X, porque Y".\n' +
+      `${ACTIONS}\n` +
+      '- Nada de relleno ni consejos genéricos ("monitorea regularmente", "considera reforzar la seguridad", "contacta a soporte").' +
+      (memory ? `\n-${MEMORY_RULE}` : '') +
       sshRule(agent) +
+      '\n\nFormato (Markdown, en este orden, sin títulos con #):\n' +
+      '**Estado:** una frase con lo más importante.\n\n' +
+      '**Qué pasa:** 1 a 3 frases con la causa probable y la evidencia (cifras del reporte).\n\n' +
+      '**Qué hacer:** hasta 3 pasos numerados, el más urgente primero. Cada paso: qué hacer y por qué en una frase, y si hay ' +
+      'comando, en un bloque ```bash debajo.\n\n' +
+      'Si todo está bien, escribe solo la línea de **Estado:**.\n' +
+      'Si hay mejoras que no son urgentes, termina con una línea que diga exactamente "SUGERENCIAS:" y debajo hasta 3 líneas que ' +
+      'empiecen con "- " (máximo 15 palabras cada una, sin comandos). Van a la pizarra de la oficina.' +
       personaOf(agent),
     messages: [{ role: 'user', content: `Reporte de esta revisión:\n${data}${memoryBlock(memory)}` }],
   });
@@ -301,25 +373,36 @@ export async function chat(agent, question) {
       {
         type: 'text',
         text:
+          `${whoIs(agent)}\n\n` +
           (agent.floor === 'negocio'
-            ? `Eres ${agent.name}, del área de negocio${ofOrg} (${agent.role}). Tu trabajo: ${agent.description} ` +
-              'Hablas con el dueño: responde en español, claro, corto y práctico. Usa los datos de tu último trabajo; ' +
-              'si no sabes algo, dilo. No contactas a nadie ni publicas nada por tu cuenta. '
-            : `Eres ${agent.name}, agente de ${agent.role} en una oficina virtual${ofOrg} que vigila ${serverText}. ` +
-              `Tu trabajo: ${agent.description} ` +
-              'Hablas con el dueño, un programador junior: responde en español, claro, corto y amable. ' +
-              'Solo observas: nunca ejecutas nada en el servidor. Si algo hay que arreglar, explica qué comando correr y por qué, ' +
-              'y avisa si es riesgoso. Usa solo los datos de tu último reporte; si no sabes algo, dilo y sugiere cómo averiguarlo. ') +
-          'Texto plano, sin tablas.' +
-          sshRule(agent) +
+            ? 'Conversas con el dueño del negocio. Cómo respondes:\n' +
+              '- Primero la respuesta, después el detalle si hace falta. Corto y práctico.\n' +
+              '- Aterrizado a su negocio (lo que sabes de él va abajo): ejemplos concretos, no consejos de manual.\n' +
+              '- Usa los datos de tu último trabajo; si algo no lo sabes, dilo en vez de inventarlo.\n' +
+              '- No contactas a nadie ni publicas nada por tu cuenta.'
+            : 'Conversas con el dueño, un programador junior. Cómo respondes:\n' +
+              '- Primero la respuesta a lo que preguntó, en 1 a 4 frases. Más detalle solo si lo pide o si hace falta para actuar.\n' +
+              `${GROUNDING}\n` +
+              `${ACTIONS} Cada comando va en un bloque \`\`\`bash con una frase de qué hace.\n` +
+              '- Si te pregunta algo fuera de tu área, responde lo que sepas y dile que el agente de ese tema lo sabe mejor.' +
+              (memory ? `\n-${MEMORY_RULE}` : '') +
+              sshRule(agent)) +
+          '\n- Español cercano y directo, sin saludos ni cierres de relleno ("¡Espero que ayude!", "¿Algo más?").' +
+          '\n- Markdown simple (negrita, listas, `código`), sin tablas ni títulos con #.' +
           personaOf(agent),
       },
       // El reporte va en su propio bloque con caché: varias preguntas seguidas lo reutilizan y cuestan menos.
-      { type: 'text', text: `Tu último reporte (datos sensibles ocultos):\n${context}${memoryBlock(memory)}`, cache_control: { type: 'ephemeral' } },
+      {
+        type: 'text',
+        text:
+          (agent.floor === 'negocio' ? `Sobre el negocio:\n${aboutBusiness()}\n\n` : '') +
+          `Tu último ${agent.floor === 'negocio' ? 'trabajo' : 'reporte'} (datos sensibles ocultos):\n${context}${memoryBlock(memory)}`,
+        cache_control: { type: 'ephemeral' },
+      },
     ],
     messages: [...history, { role: 'user', content: question }],
   });
 
-  if (response.stop_reason === 'refusal') return { text: 'Prefiero no responder eso. ¿Te ayudo con otra cosa del servidor?', tokens };
+  if (response.stop_reason === 'refusal') return { text: 'Prefiero no responder eso. Pregúntame otra cosa de mi trabajo.', tokens };
   return { text: textOf(response) || 'No tengo una respuesta para eso.', tokens };
 }

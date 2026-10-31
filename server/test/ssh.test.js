@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { QUERIES, sshQuery } from '../collectors/ssh.js';
+import { QUERIES, TARGETS, parseIp, queriesFor, sshQuery } from '../collectors/ssh.js';
 import { parseSs } from '../collectors/ports.js';
 import { parseSsh } from '../collectors/sshlog.js';
-import { parseUpdates } from '../agents/ciberseguridad.js';
+import { parseUpdates, snortIps, ipTitle, ipDetail } from '../agents/ciberseguridad.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -59,6 +59,72 @@ test('sshQuery rechaza lo que no está en la lista, sin conectarse', async () =>
 
 test('el script del servidor conoce exactamente las mismas consultas', () => {
   const script = fs.readFileSync(path.join(root, 'scripts', 'oficina-ssh.sh'), 'utf8');
-  const names = [...script.matchAll(/^ {2}([a-z_]+)\)$/gm)].map((m) => m[1]);
+  // Una por línea ("  estado)") o varias juntas ("  firewall | logs)").
+  const names = [...script.matchAll(/^ {2}([a-z_]+(?: \| [a-z_]+)*)\)$/gm)].flatMap((m) => m[1].split(' | '));
   assert.deepEqual(names.sort(), Object.keys(QUERIES).sort());
+});
+
+test('las consultas que van a oficina-root existen allá', () => {
+  const ssh = fs.readFileSync(path.join(root, 'scripts', 'oficina-ssh.sh'), 'utf8');
+  const rootScript = fs.readFileSync(path.join(root, 'scripts', 'oficina-root.sh'), 'utf8');
+  const delegated = ssh.match(/^ {2}([a-z_]+(?: \| [a-z_]+)*)\)\n\s+# Necesitan root/m)[1].split(' | ');
+  const known = [...rootScript.matchAll(/^ {2}([a-z_]+)\)$/gm)].map((m) => m[1]);
+  for (const name of [...delegated, 'ip_bloqueada']) assert.ok(known.includes(name), `oficina-root no conoce ${name}`);
+});
+
+test('sshQuery valida el objetivo antes de conectarse', async () => {
+  for (const bad of ['1.2.3.4;id', '$(id)', '1.2.3.4 5.6.7.8', '256.1.1.1', '../etc', 'a b', '']) {
+    await assert.rejects(sshQuery('ip', bad), /objetivo inválido/);
+  }
+  await assert.rejects(sshQuery('logs', '../x'), /objetivo inválido/);
+  await assert.rejects(sshQuery('logs', '-f'), /objetivo inválido/);
+  await assert.rejects(sshQuery('estado', '1.2.3.4'), /no lleva objetivo/);
+  assert.ok(TARGETS.ip('203.0.113.5') && TARGETS.ip('2001:db8::1') && TARGETS.logs('container-monitor'));
+});
+
+test('Leo ve todas las consultas; los demás, solo las básicas', () => {
+  const all = queriesFor({ sshQueries: 'todas' });
+  const basic = queriesFor({});
+  assert.deepEqual(all, Object.keys(QUERIES));
+  assert.ok(basic.includes('estado') && basic.includes('actualizaciones'));
+  for (const n of ['snort', 'ip', 'firewall', 'logs', 'db_logins']) assert.ok(!basic.includes(n), n);
+});
+
+test('parseIp entiende la salida de la consulta ip', () => {
+  const out = [
+    'snort_alertas: 80',
+    'snort_regla: Possible Nmap SYN Scan (80)',
+    'snort_puerto: 443 (80)',
+    'snort_ultima: 10/30-19:35:26.123456',
+    'ssh_fallidos: 2',
+    'ssh_aceptados: 0',
+    'tailnet: no',
+    'bloqueada: no',
+    'whois: NetName:        EJEMPLO-NET',
+    'whois: OrgName:        Ejemplo LLC',
+  ].join('\n');
+  const r = parseIp(out);
+  assert.equal(r.snortAlerts, 80);
+  assert.deepEqual(r.snortRules, ['Possible Nmap SYN Scan (80)']);
+  assert.equal(r.sshFailed, 2);
+  assert.equal(r.tailnet, null);
+  assert.equal(r.blocked, false);
+  assert.deepEqual(r.whois, ['NetName: EJEMPLO-NET', 'OrgName: Ejemplo LLC']);
+  assert.equal(ipTitle('203.0.113.5', r), 'Quién es 203.0.113.5 (Ejemplo LLC)');
+  assert.match(ipDetail(r), /80 alertas de Snort.*a los puertos 443 \(80\).*2 intentos SSH fallidos.*no está bloqueada/);
+
+  const own = parseIp('snort_alertas: 3\ntailnet: homelab\nbloqueada: si (firewall)');
+  assert.equal(own.blocked, 'firewall');
+  assert.match(ipTitle('100.64.0.2', own), /homelab.*falsa alarma/);
+});
+
+test('snortIps saca las IPs de las alertas de Snort, sin repetir', () => {
+  const events = [
+    { kind: 'snort', detail: 'Possible Nmap SYN Scan — 5 alertas desde 203.0.113.5 en 10 min (sid 1000004)' },
+    { kind: 'snort', detail: 'Otra — 2 alertas desde 203.0.113.5 en 10 min' },
+    { kind: 'snort', detail: 'IPv6 — 2 alertas desde 2001:db8::1 en 10 min' },
+    { kind: 'snort', detail: 'sin ip — desde ningún lado' },
+    { kind: 'container_down', detail: 'desde 198.51.100.1' },
+  ];
+  assert.deepEqual(snortIps(events), ['203.0.113.5', '2001:db8::1']);
 });

@@ -98,6 +98,11 @@ ninguna se cae si la otra falla. Si pones `MONITOR_URL`, se conectan así:
 - Si la Oficina **no** corre en el servidor vigilado, pon `LOCAL_CHECKS=false`: las métricas y contenedores
   salen del monitor, y Leo no revisa SSH, puertos ni actualizaciones de la máquina equivocada. Sofía le pide
   los logs al monitor (`/api/containers/:id/logs`, desde container-monitor 2.4.0).
+- Con `SSH_HOST` (usuario `oficina` en el servidor, ver `scripts/oficina-ssh.sh`), los agentes piden datos del
+  servidor por SSH, siempre de una lista fija de consultas de solo lectura. Leo tiene más que el resto: Snort,
+  firewall y fail2ban, todo sobre una IP, conexiones, logs de un contenedor y la base de datos (conexiones, tablas
+  sin RLS, logins de Supabase Auth, con SQL fijo en una transacción de solo lectura). Cuando llega una alerta de
+  Snort, Leo averigua la IP antes de diagnosticar: si es de tu tailnet, si está bloqueada y de quién es.
 - `server/ai.js` — **toda** llamada a Claude pasa por aquí: guarda los tokens, estima el costo y respeta
   el tope diario.
 - `web/` — la interfaz en React. La oficina 3D está en `web/src/office3d/` y usa
@@ -152,7 +157,7 @@ Prende uno o varios proveedores en el `.env` y en `agentes.json` cada agente eli
 | --- | --- | --- |
 | Claude (Anthropic) | `ANTHROPIC_API_KEY` | El único que busca clientes en la web (Diego). |
 | Ollama (local) | `OLLAMA_URL` (y opcional `OLLAMA_MODELS`) | Gratis y los datos no salen de tu red. Los modelos se leen solos. |
-| OpenCode | `OPENCODE_API_KEY` (y opcional `OPENCODE_MODELS`) | Los modelos de opencode.ai por su API compatible con OpenAI. |
+| OpenCode | `OPENCODE_API_KEY` (y opcional `OPENCODE_MODELS`, `OPENCODE_PLAN=go`) | Los modelos de opencode.ai por su API compatible con OpenAI. Con la suscripción Go, `OPENCODE_PLAN=go`: la Oficina manda su sesión y su User-Agent como pide Go, y guarda lo que cada respuesta descontó del plan. |
 | Compatible con OpenAI | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODELS` | OpenAI, LM Studio, llama.cpp, vLLM, OpenRouter… Sin key se toma como local. |
 
 El modelo general (`AI_MODEL`) puede ser de cualquiera: `claude-haiku-5-5`, `ollama:qwen3:8b`,
@@ -358,6 +363,7 @@ Cada agente admite:
 | `nombre`, `puesto`, `descripcion` | Cómo se llama y cómo se presenta. |
 | `personalidad` | Cómo te habla cuando usa la IA. Solo cambia la forma de hablar, nunca sus reglas. |
 | `contexto` | Lo que debe saber de tu servidor, p. ej. "backup-x se reinicia a propósito a las 4 am". Se le pasa a la IA. |
+| `guia` | Un archivo con reglas largas, relativo a `config/`, p. ej. `guias/marca.md`. Se le pasa a la IA (máximo 6000 caracteres) y se relee al cambiar. Queda fuera de git. |
 | `color`, `pelo`, `piel` | Colores como `#3b82f6` (pelo y piel vacíos = automático). |
 | `modelo`, `tokensDiarios` | Su IA y su tope diario (vacío / 0 = los generales). |
 | `alertas` | Qué tipos de alerta del monitor atiende: `["container_*", "snort"]` (`*` al final es comodín). |

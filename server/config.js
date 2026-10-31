@@ -24,6 +24,10 @@ const priceOf = (prefix) => {
 const ollamaUrl = trimUrl(process.env.OLLAMA_URL).replace(/\/v1$/, '');
 const openaiKey = process.env.OPENAI_API_KEY || '';
 const openaiUrl = trimUrl(process.env.OPENAI_BASE_URL) || (openaiKey ? 'https://api.openai.com/v1' : '');
+// OpenCode cobra del saldo de la consola (pago por uso) o de la suscripción Go (OPENCODE_PLAN=go, go-plus…).
+// Go tiene su propia dirección y su propia lista de modelos.
+const opencodeGo = /^go\b/i.test((process.env.OPENCODE_PLAN || '').trim());
+const opencodeApi = `https://opencode.ai/inference${opencodeGo ? '/go' : ''}`;
 
 // Proveedores de IA. Un modelo se nombra "proveedor:modelo" (p. ej. ollama:qwen3:8b); los de Claude van sin prefijo.
 // kind "openai" = habla la API de chat de OpenAI, que entienden Ollama, OpenCode, LM Studio, llama.cpp, vLLM, OpenRouter…
@@ -49,13 +53,15 @@ const providers = [
   },
   {
     id: 'opencode',
-    name: 'OpenCode',
+    name: opencodeGo ? 'OpenCode Go' : 'OpenCode',
     kind: 'openai',
     keyVar: 'OPENCODE_API_KEY',
     key: process.env.OPENCODE_API_KEY || '',
     needsKey: true,
-    url: trimUrl(process.env.OPENCODE_BASE_URL) || 'https://opencode.ai/inference/openai/v1',
-    modelsUrl: process.env.OPENCODE_BASE_URL ? '' : 'https://opencode.ai/inference/v1/models',
+    url: trimUrl(process.env.OPENCODE_BASE_URL) || `${opencodeApi}/openai/v1`,
+    modelsUrl: process.env.OPENCODE_BASE_URL ? '' : `${opencodeApi}/v1/models`,
+    // Va a la API de opencode.ai: se identifica, manda la sesión de cada conversación y trae su costo real.
+    opencode: { go: opencodeGo },
     models: list(process.env.OPENCODE_MODELS),
     price: priceOf('OPENCODE'),
   },

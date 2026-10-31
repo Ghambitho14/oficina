@@ -16,6 +16,7 @@ import { config } from '../config.js';
 import { getSetting } from '../db.js';
 import { agentApiKey, apiKeyVar } from '../agent-keys.js';
 import { allModels, resolveModel } from '../providers.js';
+import { modelOf } from '../ai.js';
 import { agentsFile, setRules, alertRoutes, defaultAlertAgent, TEMPLATE } from '../agents-file.js';
 
 const floorOf = (p) => p.floor || 'infra';
@@ -60,7 +61,7 @@ setRules({ puestos: catalog.map((p) => p.id), check });
 // Keys propias de un agente: el nombre de la variable para cada proveedor que usa key, y cuáles tiene puestas.
 const keyVarsOf = (keyId) =>
   Object.fromEntries(config.ai.providers.filter((p) => p.keyVar).map((p) => [p.id, apiKeyVar(keyId, p.id)]));
-const providerOf = (a, p) => resolveModel(a.modelo || p.defaultModel || config.ai.model).provider.id;
+const providerOf = (a, p) => resolveModel(modelOf({ id: a.id, model: a.modelo, defaultModel: p.defaultModel })).provider.id;
 const ownKeysOf = (keyId) => config.ai.providers.filter((p) => p.keyVar && agentApiKey(keyId, p.id)).map((p) => p.id);
 
 // Cada agente del archivo con su puesto encima: lo que hace (run, reglas) viene del puesto; cómo se llama, cómo se
@@ -90,6 +91,7 @@ export function allAgents() {
         skin: a.piel || null,
         persona: a.personalidad || '',
         context: a.contexto || '',
+        guide: a.guide || '',
         model: a.modelo || '',
         dailyTokens: a.tokensDiarios || 0,
         alerts: a.alertas,

@@ -5,6 +5,41 @@ import { config } from '../config.js';
 import { collectSsh, parseSsh } from '../collectors/sshlog.js';
 import { collectPorts, parseSs } from '../collectors/ports.js';
 import { fetchSnortToday, eventFinding } from '../collectors/monitor.js';
+import { TARGETS, parseIp } from '../collectors/ssh.js';
+
+// Las IPs de origen de las alertas de Snort ("… 5 alertas desde 203.0.113.5 en 10 min"), sin repetir y como mucho 3.
+export const snortIps = (events) =>
+  [...new Set(events.filter((e) => e.kind === 'snort').map((e) => String(e.detail || '').match(/desde ([0-9a-fA-F.:]+)/)?.[1]))]
+    .filter((ip) => ip && TARGETS.ip(ip))
+    .slice(0, 3);
+
+// Pregunta al servidor todo lo que sabe de cada IP (consulta "ip").
+const lookIps = (ctx, events) =>
+  Promise.all(
+    snortIps(events).map((ip) =>
+      ctx.ssh('ip', ip).then(
+        (text) => ({ ip, info: parseIp(text) }),
+        (err) => ({ ip, error: err.message }),
+      ),
+    ),
+  );
+
+export const ipTitle = (ip, info) =>
+  info.tailnet ? `${ip} es ${info.tailnet}, un equipo de tu tailnet: falsa alarma` : `Quién es ${ip}${info.whois.length ? ` (${ownerOf(info)})` : ''}`;
+// El nombre de la organización si lo hay; si no, el de la red.
+const ownerOf = (info) =>
+  ['OrgName|org-name|owner', 'descr', 'netname']
+    .map((keys) => info.whois.map((w) => w.match(new RegExp(`^(?:${keys}):\\s*(.+)`, 'i'))?.[1]).find(Boolean))
+    .find(Boolean) || 'dueño desconocido';
+export const ipDetail = (info) =>
+  [
+    `${info.snortAlerts} alertas de Snort (hoy y ayer)${info.snortRules.length ? `: ${info.snortRules.slice(0, 2).join(', ')}` : ''}`,
+    info.snortPorts.length && `a los puertos ${info.snortPorts.slice(0, 3).join(', ')}`,
+    `${info.sshFailed} intentos SSH fallidos y ${info.sshAccepted} accesos`,
+    info.blocked === false ? 'no está bloqueada' : info.blocked ? `bloqueada (${info.blocked})` : 'no sé si está bloqueada',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
 // Ej.: "5 updates can be applied immediately. 2 of these updates are standard security updates."
 export function parseUpdates(text) {
@@ -34,9 +69,12 @@ function hostChecks(ctx) {
 
 export default {
   id: 'ciberseguridad',
+  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
+  expertise: 'Tu especialidad: la seguridad del servidor. SSH (fuerza bruta, logins con contraseña o como root), puertos expuestos, certificados SSL, cabeceras HTTP, actualizaciones pendientes y alertas de Snort. Separas el ruido de Internet (bots y escaneos que golpean a todos los servidores) de lo que importa de verdad: un login exitoso raro, un puerto de base de datos abierto, una IP que insiste contra una app. Antes de recomendar bloquear una IP, miras si es de un servicio legítimo (Cloudflare, Google, el propio monitor). Comandos que conoces: sudo ss -tlnp, sudo ufw status verbose, sudo fail2ban-client status sshd, sudo grep Accepted /var/log/auth.log | tail, apt list --upgradable.',
   floor: 'infra',
   schedule: 'auto',
   daily: true, // Snort cuenta lo de hoy: revisa solo al empezar el día (ver scheduler.js)
+  sshQueries: 'todas', // con SSH puede pedir también Snort, firewall, IPs, logs y la base de datos (ver collectors/ssh.js)
 
   async run(ctx) {
     const t = ctx.agent.watch; // sus umbrales: "vigila" en agentes.json
@@ -48,6 +86,16 @@ export default {
 
     // Lo que avisó el monitor va primero: es el motivo de esta revisión.
     for (const e of ctx.input?.events || []) findings.push(eventFinding(e));
+
+    // Si la alerta es de Snort, se averigua quién es la IP antes de diagnosticar (con SSH).
+    const ips = ctx.ssh ? await lookIps(ctx, ctx.input?.events || []) : [];
+    for (const r of ips) {
+      if (r.error) add('info', `No pude averiguar más de ${r.ip}`, r.error);
+      else {
+        add('info', ipTitle(r.ip, r.info), ipDetail(r.info));
+        ctx.log(`Averigüé por SSH quién es ${r.ip}: ${ipDetail(r.info)}`);
+      }
+    }
 
     const checks = hostChecks(ctx);
     const via = checks?.from === 'ssh' ? ` de ${config.brand.server} por SSH` : '';
@@ -120,6 +168,7 @@ export default {
         certificates: sites.filter((s) => s.ssl).map((s) => ({ url: s.url, ...s.ssl })),
         updates,
         snort: snort && { n: snort.n || 0, sources: snort.sources || 0, topSources: snort.topSources?.slice(0, 5), topRules: snort.topRules?.slice(0, 5) },
+        ...(ips.length && { ips: ips.map((r) => ({ ip: r.ip, ...(r.error ? { error: r.error } : r.info) })) }),
       },
     };
   },

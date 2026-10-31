@@ -7,8 +7,8 @@ import { agentsFile, agentsFileStatus, legacyVars, TEMPLATE_PATH } from './agent
 import { latestReport, history, recentAlerts, logActivity, addChatMessage, chatHistory, clearChat, recentReports, listBoard, dismissBoard, boardCard, listMemory, forgetMemory, countReportsSince, getSetting, setSetting, listLeads, updateLead, businessSummary, listActivity, latestSample, series, uptime, usageSummary, dbSizeMb, onActivity } from './db.js';
 import { login, logout, requireAuth, authConfigured } from './auth.js';
 import { startScheduler, runAll, runAgent, createContext, reviewCard, working, rounds } from './scheduler.js';
-import { aiEnabled, aiEnabledFor, budget, chat, AiUnavailable, missingFor, modelOf } from './ai.js';
-import { providerList, refreshModels, resolveModel } from './providers.js';
+import { aiEnabled, aiEnabledFor, budget, chat, AiUnavailable, missingFor, modelOf, generalModel, chosenModels, setChosenModel } from './ai.js';
+import { providerList, refreshModels, resolveModel, allModels } from './providers.js';
 import { telegramEnabled, sendTest } from './notify/telegram.js';
 import { startMonitorFeed, monitorStatus, monitorAgentsState, setMonitorAgents } from './monitor-feed.js';
 import { initVault, journal, vaultEnabled } from './vault.js';
@@ -41,7 +41,7 @@ app.get('/api/me', (req, res) =>
   res.json({
     user: req.user,
     ai: aiEnabled(),
-    aiModel: config.ai.model,
+    aiModel: generalModel(),
     telegram: telegramEnabled(),
     intervalMin: config.intervalMin,
     agentMode: config.agentMode,
@@ -172,7 +172,7 @@ app.get('/api/activity', (req, res) => {
 app.get('/api/usage', (_req, res) =>
   res.json({
     enabled: aiEnabled(),
-    model: config.ai.model,
+    model: generalModel(),
     budget: budget(),
     // Proveedores locales prendidos: sus tokens no cuentan para el tope general.
     free: providerList().filter((p) => p.ready && p.free).map((p) => p.name),
@@ -250,7 +250,12 @@ app.get('/api/settings/agents', async (_req, res) => {
       ownKey: a.ownKey,
       keyVar: a.keyVar,
       // El modelo que usa si no tiene uno propio (el buscador de clientes tiene el suyo: LEADS_MODEL).
-      defaultModel: modelOf({ ...a, model: '' }),
+      defaultModel: a.defaultModel || generalModel(),
+      // El elegido en Ajustes › IA (manda sobre "modelo" del archivo) y con el que trabaja de verdad.
+      chosenModel: chosenModels().agents[a.id] || '',
+      activeModel: modelOf(a),
+      webSearch: Boolean(a.webSearch),
+      ownKeys: a.ownKeys,
       missing: aiEnabledFor(a) ? null : missingFor(a),
     })),
     pages: agentsFile().paginas,
@@ -262,7 +267,10 @@ app.get('/api/settings/agents', async (_req, res) => {
     providers: providerList(),
     generalKey: aiEnabled(),
     models: aiModels(),
-    defaultModel: config.ai.model,
+    defaultModel: generalModel(),
+    // AI_MODEL del .env y el general elegido en el panel ('' = vale el del .env).
+    envModel: config.ai.model,
+    chosenGeneral: chosenModels().general,
     telegram: telegramEnabled(),
     monitorAgents: monitorAgentsState(),
   });
@@ -273,6 +281,29 @@ const editInFile = (_req, res) => res.status(410).json({ error: `Los agentes aho
 app.put('/api/settings/agents/:id', editInFile);
 app.post('/api/settings/agents', editInFile);
 app.delete('/api/settings/agents/:id', editInFile);
+
+// Ajustes › IA: el modelo general y el de cada agente, entre los de los proveedores prendidos. Vacío = lo del .env
+// (AI_MODEL) o el "modelo" de agentes.json. Se aplica en la siguiente llamada a la IA, sin reiniciar.
+async function chooseModel(req, res, agent) {
+  const model = typeof req.body?.model === 'string' ? req.body.model.trim() : null;
+  if (model === null) return res.status(400).json({ error: 'Falta "model" (vacío para volver al del .env o el archivo)' });
+  if (model) {
+    await refreshModels();
+    if (!allModels().includes(model)) return res.status(400).json({ error: `El modelo ${model} no está disponible: su proveedor está apagado o no lo tiene` });
+    if (agent?.webSearch && !resolveModel(model).provider.webSearch)
+      return res.status(400).json({ error: `${agent.name} busca en la web y eso solo lo hacen los modelos de Claude` });
+  }
+  setChosenModel(agent ? agent.id : 'general', model);
+  const who = agent ? `de ${agent.name}` : 'general';
+  logActivity(agent?.id ?? 'sistema', 'manual', `${req.user} cambió el modelo ${who} a ${model || `lo del ${agent ? 'archivo' : '.env'}`}`);
+  res.json({ ok: true, model: agent ? modelOf(agent) : generalModel() });
+}
+app.put('/api/settings/model', (req, res) => chooseModel(req, res, null));
+app.put('/api/settings/agents/:id/model', (req, res) => {
+  const agent = allAgents().find((a) => a.id === req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agente no encontrado' });
+  return chooseModel(req, res, agent);
+});
 
 // Botón "Agentes de monitor".
 app.put('/api/monitor-agents', (req, res) => {
@@ -388,7 +419,7 @@ const server = app.listen(config.port, () => {
     );
   }
   const ready = providerList().filter((p) => p.ready).map((p) => p.name);
-  console.log(`IA: ${ready.length ? `${config.ai.model} · proveedores: ${ready.join(', ')}` : 'desactivada'} · Telegram: ${telegramEnabled() ? 'activo' : 'desactivado'}`);
+  console.log(`IA: ${ready.length ? `${generalModel()} · proveedores: ${ready.join(', ')}` : 'desactivada'} · Telegram: ${telegramEnabled() ? 'activo' : 'desactivado'}`);
   console.log(
     `Agentes: ${config.agentMode === 'alertas' ? 'esperan alertas u órdenes' : `revisan cada ${config.intervalMin} min`} · ` +
       `Monitor: ${config.monitor.url || 'no conectado'} · Revisiones locales: ${config.localChecks ? 'sí' : 'no'}`,

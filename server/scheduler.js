@@ -85,9 +85,14 @@ export function createContext() {
     return () => (p ??= fn());
   };
   const monitor = monitorEnabled() ? memo(fetchOverview) : null;
-  // Una consulta SSH con nombre (ver collectors/ssh.js); cada una se pide una sola vez por ronda.
+  // Una consulta SSH con nombre (ver collectors/ssh.js), con su objetivo si lleva; cada una se pide una sola vez por ronda.
   const queries = new Map();
-  const ssh = sshEnabled() ? (name) => queries.get(name) ?? queries.set(name, sshQuery(name)).get(name) : null;
+  const ssh = sshEnabled()
+    ? (name, target) => {
+        const key = target ? `${name} ${target}` : name;
+        return queries.get(key) ?? queries.set(key, sshQuery(name, target)).get(key);
+      }
+    : null;
   const remote = (pick) => () =>
     monitor ? monitor().then(pick) : Promise.reject(new Error('LOCAL_CHECKS=false y falta MONITOR_URL: no tengo de dónde leer el servidor'));
   return {

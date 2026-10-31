@@ -9,6 +9,8 @@ id_ed25519*
 id_rsa*
 # Tus agentes (la plantilla es server/agentes.example.json)
 config/agentes.json
+# Las guías de cada agente hablan de tu negocio
+config/guias/
 
 # Local de cada máquina
 .claude/

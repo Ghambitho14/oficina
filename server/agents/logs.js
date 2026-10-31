@@ -3,6 +3,8 @@ import { collectLogs, logSource } from '../collectors/logs.js';
 
 export default {
   id: 'logs',
+  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
+  expertise: 'Tu especialidad: los logs de las apps. Agrupas los errores que son el mismo problema, separas la causa raíz de los errores que provoca en cascada (una base caída produce cientos de "connection refused") y distingues errores reales (5xx, excepciones sin manejar, fatal, sin memoria) del ruido (404 de bots, avisos de deprecación). Citas solo la línea de log que importa, recortada. Comandos que conoces: docker logs --since 30m <contenedor> 2>&1 | grep -iE "error|fatal|exception" | tail -50, docker inspect <contenedor> --format "{{.State.OOMKilled}} {{.RestartCount}}".',
   floor: 'infra',
   schedule: 'auto',
 

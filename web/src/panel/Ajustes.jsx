@@ -1,6 +1,7 @@
-// Ajustes › Agentes: muestra cómo está armado el equipo. Ya no se edita aquí: todo lo que hace a cada agente
-// (nombre, aspecto, personalidad, modelo, qué alertas atiende y sus umbrales) vive en config/agentes.json.
-// La API key propia de un agente solo se pone en el .env; aquí se ve si la tiene y cómo se llama la variable.
+// Ajustes › Agentes: muestra cómo está armado el equipo. Casi nada se edita aquí: lo que hace a cada agente
+// (nombre, aspecto, personalidad, qué alertas atiende y sus umbrales) vive en config/agentes.json.
+// Lo único que se cambia desde el panel es el modelo de IA (el general y el de cada agente), entre los de las APIs
+// prendidas. La API key propia de un agente solo se pone en el .env; aquí se ve si la tiene y cómo se llama la variable.
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import MonitorSwitch from '../MonitorSwitch.jsx';
@@ -35,7 +36,116 @@ const EXAMPLE = `{
   }
 }`;
 
-function AgentCard({ agent }) {
+// Un selector con los modelos de cada proveedor. Los de un proveedor apagado salen deshabilitados (salvo que el
+// agente tenga key propia para él); `webOnly` deja solo los que buscan en la web (Claude).
+function ModelSelect({ value, providers, emptyLabel, ownKeys = [], webOnly = false, onChange, busy }) {
+  const known = providers.some((p) => p.models.includes(value));
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={busy}>
+      <option value="">{emptyLabel}</option>
+      {value && !known && (
+        <option value={value} disabled>
+          {value} (no disponible)
+        </option>
+      )}
+      {providers
+        .filter((p) => p.models.length && (!webOnly || p.webSearch))
+        .map((p) => {
+          const usable = p.ready || ownKeys.includes(p.id);
+          return (
+            <optgroup key={p.id} label={`${p.name}${usable ? '' : ` · apagado (falta ${p.keyVar || p.urlVar})`}`}>
+              {p.models.map((m) => (
+                <option key={m} value={m} disabled={!usable}>
+                  {m.slice(m.indexOf(':') + 1) || m}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
+    </select>
+  );
+}
+
+// Guarda un modelo elegido y avisa cómo quedó.
+function useChoose(path, onSaved) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  async function choose(model) {
+    setBusy(true);
+    setMsg('');
+    try {
+      const r = await api(path, { method: 'PUT', body: { model } });
+      setMsg(`✅ Ahora usa ${r.model}`);
+      await onSaved?.();
+    } catch (err) {
+      setMsg(`⚠️ ${err.message}`);
+    }
+    setBusy(false);
+  }
+  return { busy, msg, choose };
+}
+
+// Ajustes › IA: qué APIs están prendidas y con qué modelo trabajan los agentes si no tienen uno propio.
+function AiSettings({ data, onSaved }) {
+  const { busy, msg, choose } = useChoose('/settings/model', onSaved);
+  return (
+    <section className="card stack">
+      <h3>Inteligencia artificial</h3>
+      <ul className="provider-list">
+        {data.providers.map((p) => (
+          <li key={p.id}>
+            <span aria-hidden="true">{p.ready ? '🟢' : '⚪'}</span>
+            <strong>{p.name}</strong>
+            <small className="muted">
+              {p.ready
+                ? `${p.models.length} modelo${p.models.length === 1 ? '' : 's'}${p.free ? ' · local, no cuenta para el tope' : ''}${p.webSearch ? ' · busca en la web' : ''}`
+                : `Apagado: pon ${[p.urlVar, p.needsKey && p.keyVar].filter(Boolean).join(' y ')} en el .env`}
+            </small>
+            {p.error && <small className="warn-text">⚠️ {p.error}</small>}
+          </li>
+        ))}
+      </ul>
+      <label className="field">
+        Modelo general (lo usan los agentes sin modelo propio)
+        <ModelSelect
+          value={data.chosenGeneral}
+          providers={data.providers}
+          emptyLabel={`El del .env (AI_MODEL: ${data.envModel})`}
+          onChange={choose}
+          busy={busy}
+        />
+      </label>
+      <p className="muted small">Se aplica en la siguiente llamada a la IA, sin reiniciar. Cada agente puede tener el suyo más abajo.</p>
+      {msg && <small>{msg}</small>}
+    </section>
+  );
+}
+
+function AgentModel({ agent, providers, onSaved }) {
+  const { busy, msg, choose } = useChoose(`/settings/agents/${agent.id}/model`, onSaved);
+  const fallback = agent.model ? `El de agentes.json (${agent.model})` : `El general (${agent.defaultModel})`;
+  return (
+    <>
+      <ModelSelect
+        value={agent.chosenModel}
+        providers={providers}
+        emptyLabel={fallback}
+        ownKeys={agent.ownKeys}
+        webOnly={agent.webSearch}
+        onChange={choose}
+        busy={busy}
+      />
+      <small className="muted">
+        Usa {agent.activeModel}
+        {agent.dailyTokens ? ` · tope propio ${agent.dailyTokens.toLocaleString('es')} tokens/día` : ''}
+      </small>
+      {agent.missing && <small className="warn-text"> · ⚠️ Sin IA: {agent.missing}</small>}
+      {msg && <small> {msg}</small>}
+    </>
+  );
+}
+
+function AgentCard({ agent, providers, onSaved }) {
   const watch = Object.entries(agent.watch || {});
   return (
     <details className={`agent-settings ${agent.enabled ? '' : 'off'}`}>
@@ -65,10 +175,8 @@ function AgentCard({ agent }) {
           </>
         )}
         <dt>IA</dt>
-        <dd>
-          {agent.model || `General (${agent.defaultModel})`}
-          {agent.dailyTokens ? ` · tope propio ${agent.dailyTokens.toLocaleString('es')} tokens/día` : ''}
-          {agent.missing && <small className="muted"> · ⚠️ Sin IA: {agent.missing}</small>}
+        <dd className="model-field">
+          <AgentModel agent={agent} providers={providers} onSaved={onSaved} />
         </dd>
         {agent.monitorAgent && (
           <>
@@ -208,6 +316,8 @@ export default function Ajustes({ onMonitorChanged }) {
         </details>
       </section>
 
+      <AiSettings data={data} onSaved={load} />
+
       <TelegramTest enabled={data.telegram} />
 
       {data.vacantes.map((v) => (
@@ -223,7 +333,7 @@ export default function Ajustes({ onMonitorChanged }) {
           {data.team
             .filter((a) => a.floor === floor)
             .map((a) => (
-              <AgentCard key={a.id} agent={a} />
+              <AgentCard key={a.id} agent={a} providers={data.providers} onSaved={load} />
             ))}
         </section>
       ))}

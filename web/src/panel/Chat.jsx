@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { clock, fmtNum } from '../ui.jsx';
+import Markdown from '../Markdown.jsx';
 
 const SUGGESTIONS = ['¿Cómo está todo?', '¿Qué debería arreglar primero?', 'Explícame el último problema que viste', '¿Qué significa eso para mi página?'];
 
@@ -96,7 +97,7 @@ export default function Chat({ agents, agentId }) {
                 {agent?.name}
               </span>
             )}
-            <p>{m.content}</p>
+            {m.role === 'assistant' ? <Markdown text={m.content} /> : <p>{m.content}</p>}
             <small className="muted">
               {clock(m.createdAt)}
               {m.tokens ? ` · ${fmtNum(m.tokens)} tokens` : ''}

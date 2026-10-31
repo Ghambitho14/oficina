@@ -2,6 +2,8 @@
 // cambios del archivo sin reiniciar y que la key nunca salga.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { startOficina, startFakeMonitor, tempDir, waitFor, activity } from './helpers.js';
 
 const FAKE_KEY = 'sk-fake-solo-de-prueba';
@@ -131,6 +133,28 @@ test('un archivo con errores no se aplica y el panel muestra el error', async ()
   assert.equal((await member('informatica')).color, '#3b82f6');
   await useFile({});
   assert.ok((await member('ciberseguridad')).enabled, 'al arreglarlo vuelve a valer');
+});
+
+test('la guía de un agente: fuera de la carpeta no se acepta; si falta o es larga solo avisa', async () => {
+  const dir = path.dirname(oficina.agentsPath);
+  for (const guia of ['../secreto.md', path.join(dir, 'guia.md')]) {
+    oficina.writeAgents({ agentes: { instagram: { guia } } });
+    const ov = await waitFor(async () => {
+      const body = (await api('GET', '/overview')).body;
+      return !body.agentsFile.ok && body;
+    }, 'el error de la guía');
+    assert.match(ov.agentsFile.error, /instagram\.guia debe ser un archivo dentro/);
+    await useFile({});
+  }
+
+  await useFile({ agentes: { instagram: { guia: 'no-existe.md' } } });
+  assert.ok((await settings()).file.warnings.some((w) => /no encontré la guía/.test(w)));
+  assert.ok((await member('instagram')).enabled, 'sin guía sigue trabajando');
+
+  fs.writeFileSync(path.join(dir, 'larga.md'), 'x'.repeat(6001));
+  await useFile({ agentes: { instagram: { guia: 'larga.md' } } });
+  assert.ok((await settings()).file.warnings.some((w) => /más de 6000 caracteres/.test(w)));
+  await useFile({});
 });
 
 test('"Sobre tu negocio" y prospectos validan lo que reciben', async () => {

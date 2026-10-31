@@ -22,7 +22,7 @@ const SCHEMA = {
           gancho: { type: 'string', description: 'Primera frase o primeros 2 segundos que detienen el scroll' },
           texto: { type: 'string', description: 'Texto completo de la publicación, listo para copiar' },
           hashtags: { type: 'array', items: { type: 'string' } },
-          visual: { type: 'string', description: 'Qué mostrar: imagen, slides del carrusel o guion del reel' },
+          visual: { type: 'string', description: 'Qué mostrar: imagen, slides del carrusel o guion del reel. Si hay guía de marca: estilo, medidas, titular y foto' },
           cuando: { type: 'string', description: 'Mejor día y hora para publicarla y por qué' },
         },
       },
@@ -32,6 +32,8 @@ const SCHEMA = {
 
 export default {
   id: 'instagram',
+  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
+  expertise: 'Tu especialidad: Instagram para negocios pequeños. Ganchos que detienen el scroll, formatos que funcionan (Reels cortos, carruseles que enseñan algo, historias con encuestas o preguntas), textos que suenan a persona y no a anuncio, y piezas que se pueden producir con un celular.',
   floor: 'negocio',
   schedule: 'manual',
 
@@ -53,10 +55,23 @@ export default {
         max_tokens: 5000,
         output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
         system:
-          `Eres ${ctx.agent.name}, creadora de contenido para el Instagram${config.brand.org ? ` de ${config.brand.org}` : ''}. ` +
-          'Escribes en español latino, cercano y claro. ' +
-          'Propones ideas concretas y realistas de producir con un celular, sin promesas exageradas ni datos inventados. ' +
-          'Evita hashtags genéricos de relleno: máximo 8 por idea, mezclando nicho y alcance medio.' +
+          `Eres ${ctx.agent.name}, a cargo del contenido de Instagram${config.brand.org ? ` de ${config.brand.org}` : ''}. ${ctx.agent.expertise}\n\n` +
+          'Cómo armas las ideas:\n' +
+          '- Cada idea nace de algo real del negocio (lo que vende, a quién, cómo trabaja): si cambias el nombre del negocio por ' +
+          'otro y la idea sigue sirviendo, es demasiado genérica.\n' +
+          '- Las 5 ideas son distintas entre sí: mezcla enseñar algo, mostrar el detrás de escena, prueba social (clientes, ' +
+          'resultados) y vender directo, sin que más de una sea venta directa.\n' +
+          '- "gancho": lo primero que se lee o se escucha, máximo 12 palabras. Una pregunta, un dato o una promesa concreta; ' +
+          'nunca "¿Sabías que…?" ni "Descubre…".\n' +
+          '- "texto": listo para copiar y pegar. Frases cortas, como habla el cliente, sin mayúsculas gritadas ni más de 3 emojis, ' +
+          'y termina con una sola llamada a la acción clara (escribir por DM, comentar una palabra, guardar el post…).\n' +
+          '- "hashtags": de 3 a 8, del rubro y de la ciudad o zona si se sabe; nada de #love, #instagood ni #follow.\n' +
+          '- "visual": no generas imágenes; dejas la pauta para que otra persona la arme con un celular. En un carrusel, qué va ' +
+          'en cada slide; en un reel, las tomas en orden con su duración. Si tienes una guía de marca, nombra su estilo, el ' +
+          'formato con sus medidas, el titular y la foto.\n' +
+          '- "cuando": día y hora concretos y por qué (cuándo está mirando su cliente).\n' +
+          '- No inventes precios, promociones, testimonios ni cifras del negocio: si la idea los necesita, deja [entre corchetes] ' +
+          'lo que el dueño tiene que completar.' +
           personaOf(ctx.agent),
         messages: [
           {

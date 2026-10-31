@@ -40,6 +40,7 @@ HomaLab/
 ├── package.json            `npm run setup`, `npm run dev` (levanta server + web juntos) y `npm test`
 ├── .claude/launch.json     Configuración para levantarla desde Claude Code (server :3000, web :5173)
 ├── scripts/oficina-ssh.sh  Va en el VPS: traduce cada consulta SSH a un comando de solo lectura y rechaza el resto
+├── scripts/oficina-root.sh Va en el VPS (con sudo): las consultas de solo lectura que piden root (firewall, Docker, base)
 │
 ├── server/                 ── BACKEND (Node 22+, Express, SQLite integrado) ──
 │   ├── index.js            Punto de entrada: API REST, login, arranque de todo
@@ -238,6 +239,7 @@ Todas piden sesión salvo las marcadas con 🌐.
 | `GET /api/activity` · `GET /api/usage` | Registro de actividad · gasto de tokens |
 | `GET /api/settings/agents` | El equipo, los puestos, las vacantes y los modelos disponibles |
 | `PUT /api/settings/agents/:id` · `POST /api/settings/agents` · `DELETE …/:id` | Cambiar persona o puesto · sumar un agente · restablecer |
+| `PUT /api/settings/model` · `PUT /api/settings/agents/:id/model` | Ajustes › IA: modelo general y de cada agente (en la base, `aiModels`; mandan sobre `AI_MODEL` y el `modelo` de agentes.json) |
 | `GET/PUT /api/settings/brief` | "Sobre tu negocio" |
 | `GET /api/leads` · `PATCH /api/leads/:id` | Prospectos |
 | `GET/POST/DELETE /api/chat/:agent` | Chat |

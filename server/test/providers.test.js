@@ -3,11 +3,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { startOficina, freePort, waitFor } from './helpers.js';
 
 const requests = []; // lo que la Oficina le mandó al modelo
 let server;
 let oficina;
+let guide; // la guía de Camila
 
 const IDEA = { titulo: 'Detrás de cámaras', formato: 'Reel', gancho: 'Así se hace', texto: 'Hoy te mostramos…', hashtags: ['#pyme'], visual: 'El equipo', cuando: 'Martes 19:00' };
 
@@ -95,6 +98,10 @@ test('el chat va a Ollama, sin key ni razonamiento, y su gasto no cuenta para el
 });
 
 test('las ideas de Instagram llegan aunque el modelo envuelva el JSON y se salte campos', async () => {
+  guide = path.join(oficina.dataDir, 'guias', 'marca.md');
+  fs.mkdirSync(path.dirname(guide), { recursive: true });
+  fs.writeFileSync(guide, 'Estilo Kitsune clásico, titular rojo.');
+  oficina.writeAgents({ agentes: { instagram: { guia: 'guias/marca.md' } } });
   assert.equal((await oficina.api('POST', '/agents/instagram/run', { input: { tema: 'equipo' } })).status, 202);
   const report = await waitFor(async () => (await oficina.api('GET', '/agents/instagram/reports')).body[0], 'las ideas');
   const { ideas } = report.metrics;
@@ -105,6 +112,7 @@ test('las ideas de Instagram llegan aunque el modelo envuelva el JSON y se salte
   const { body } = requests.at(-1);
   assert.equal(body.response_format.type, 'json_schema');
   assert.match(body.messages[0].content, /JSON Schema/);
+  assert.match(JSON.stringify(body), /Kitsune clásico/, 'con su guía');
 });
 
 test('el panel sabe con qué modelo trabaja cada agente y de dónde lee, sin ver keys', async () => {
@@ -140,6 +148,21 @@ test('la memoria del agente le llega a la IA aunque no haya Obsidian', async () 
   })(), 'que la IA reciba la memoria');
 });
 
+test('la guía se relee al cambiar y también llega al chat', async () => {
+  const chat = async () => {
+    await oficina.api('POST', '/chat/instagram', { message: '¿Qué estilo usas?' });
+    return JSON.stringify(requests.at(-1).body);
+  };
+  assert.match(await chat(), /Kitsune clásico/);
+  fs.writeFileSync(guide, 'Estilo Pop delivery, fondo rojo.');
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(guide, later, later);
+  const body = await chat();
+  assert.match(body, /Pop delivery/);
+  assert.doesNotMatch(body, /Kitsune clásico/);
+  oficina.writeAgents({});
+});
+
 test('el reporte guarda de qué modelo y de cuándo es el diagnóstico, y si se reusó', async () => {
   // Sin monitor y sin revisiones locales Ana reporta un problema: hay diagnóstico de la IA.
   const first = await waitFor(async () => {
@@ -157,4 +180,32 @@ test('el reporte guarda de qué modelo y de cuándo es el diagnóstico, y si se 
   assert.equal(again.aiSummary, first.aiSummary);
   assert.equal(again.aiReused, true);
   assert.equal(again.aiModel, 'ollama:qwen3:8b');
+});
+
+test('el modelo general y el de cada agente se cambian desde el panel, solo entre los disponibles', async () => {
+  const put = (path, model) => oficina.api('PUT', path, { model });
+  assert.equal((await put('/settings/model', 'ollama:no-existe')).status, 400);
+  assert.equal((await put('/settings/agents/clientes/model', 'ollama:qwen3:8b')).status, 400, 'Diego necesita Claude');
+  assert.equal((await put('/settings/agents/nadie/model', '')).status, 404);
+
+  // Ana pasa a Claude (sin key: queda sin IA y el panel lo dice) y vuelve al general.
+  const r = await put('/settings/agents/informatica/model', 'claude-sonnet-5-5');
+  assert.equal(r.status, 200, r.text);
+  let s = (await oficina.api('GET', '/settings/agents')).body;
+  let ana = s.team.find((a) => a.id === 'informatica');
+  assert.equal(ana.chosenModel, 'claude-sonnet-5-5');
+  assert.equal(ana.activeModel, 'claude-sonnet-5-5');
+  assert.equal(ana.ai, false);
+  assert.equal((await put('/settings/agents/informatica/model', '')).status, 200);
+
+  // El general elegido manda sobre AI_MODEL para todos los que no tienen uno propio.
+  assert.equal((await put('/settings/model', 'claude-haiku-5-5')).status, 200);
+  s = (await oficina.api('GET', '/settings/agents')).body;
+  ana = s.team.find((a) => a.id === 'informatica');
+  assert.equal(s.chosenGeneral, 'claude-haiku-5-5');
+  assert.equal(s.envModel, 'ollama:qwen3:8b');
+  assert.equal(ana.activeModel, 'claude-haiku-5-5');
+  assert.equal((await oficina.api('GET', '/me')).body.aiModel, 'claude-haiku-5-5');
+  assert.equal((await put('/settings/model', '')).status, 200);
+  assert.equal((await oficina.api('GET', '/settings/agents')).body.team.find((a) => a.id === 'informatica').activeModel, 'ollama:qwen3:8b');
 });
