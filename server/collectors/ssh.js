@@ -22,6 +22,7 @@ export const QUERIES = {
   // responde scripts/oficina-root.sh con sudo, también de solo lectura.
   snort: 'Las últimas 100 alertas de Snort (detector de intrusos)',
   conexiones: 'Conexiones TCP abiertas ahora, contadas por IP remota',
+  conexiones_puertos: 'Conexiones TCP abiertas ahora, contadas por puerto del servidor e IP remota',
   ip: 'Todo sobre una IP (objetivo = la IP): sus alertas de Snort, intentos SSH, si es de la tailnet, si está bloqueada y de quién es (whois)',
   firewall: 'Reglas de entrada del firewall, IPs bloqueadas a mano y baneadas por fail2ban',
   contenedores: 'Contenedores de Docker con su estado e imagen',

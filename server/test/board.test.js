@@ -132,6 +132,20 @@ test('lo de ayer no cuenta: la tarjeta se va y vuelve solo si se repite hoy', as
   assert.match((await cards('alertas de Snort'))[0].title, /^35 alertas de Snort hoy/);
 });
 
+test('"Revisado" también desde el panel del agente', async () => {
+  const { title } = (await leo()).findings.find((f) => /alertas de Snort/.test(f.title));
+  const send = (body) => oficina.api('POST', '/agents/ciberseguridad/review', body);
+  assert.equal((await send({ title, note: ' ' })).status, 400);
+  assert.equal((await send({ title: 'Un aviso que no existe', note: 'Algo' })).status, 404);
+  assert.equal((await send({ title, note: 'Lo vi desde el panel' })).status, 200);
+  assert.equal((await cards('alertas de Snort')).length, 0, 'sale de la pizarra al instante');
+  const report = await waitFor(async () => {
+    const r = await leo();
+    return r.status === 'ok' && r;
+  }, 'que Leo quede en verde');
+  assert.match(report.findings.find((f) => /Snort/.test(f.title)).detail, /Ya revisado por admin: Lo vi desde el panel/);
+});
+
 test('un recuerdo se puede olvidar', async () => {
   const [m] = await memory();
   assert.equal((await oficina.api('DELETE', `/memory/${m.id}`)).status, 200);

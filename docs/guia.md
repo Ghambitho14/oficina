@@ -124,14 +124,20 @@ Cada agente recuerda, en la base de la Oficina, qué problemas ha visto, cuánta
 con o sin Obsidian y se ve en su panel, en **Memoria**, donde también puedes olvidar un recuerdo. Si Obsidian está
 conectado, cada revisión queda además en la bitácora y sus notas se suman a lo que lee la IA.
 
-Con **Revisado** en una tarjeta de la pizarra le cuentas qué se hizo. El agente lo anota, revisa de nuevo y deja de
-marcarlo como problema (queda como información), salvo en dos casos:
+Con **Revisado** en una tarjeta de la pizarra, o en un aviso de "Necesita tu atención" en el panel del agente, le cuentas
+qué se hizo. El agente lo anota, revisa de nuevo y deja de marcarlo como problema (queda como información), salvo en dos
+casos:
 
 - **Empeora:** si el número del problema se dobla (Snort pasó de 405 a 900), vuelve a avisar y dice qué se hizo antes.
 - **Se va y vuelve:** cuenta una vez más y avisa de nuevo, recordando lo anterior para que se note el patrón.
 
 Las alertas del monitor siempre llegan, aunque el problema esté revisado. La memoria también se le pasa a la IA en cada
 diagnóstico y en el chat.
+
+Cada puerto abierto de más es un problema aparte: revisar el 6001 no calla al 6002 ni a uno que se abra después. Un
+puerto revisado sigue vigilado: Leo avisa si hoy hay alertas de Snort contra él o si, al revisar, hay conexiones desde
+Internet (sin contar tu tailnet ni redes privadas). Por SSH esto último usa la consulta `conexiones_puertos`: copia de
+nuevo `scripts/oficina-ssh.sh` al servidor. Si agregas el puerto a `vigila.puertosPermitidos`, Leo deja de vigilarlo.
 
 ### Para ahorrar tokens
 

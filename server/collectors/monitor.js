@@ -51,7 +51,9 @@ export async function fetchSnortToday(now = Date.now()) {
   const list = alerts.filter((a) => dayOf(a.ts) === today);
   if (list.length < SNORT_LIST_MAX) {
     const topSources = tally(list, 'src');
-    return { n: list.length, sources: topSources.length, topSources, topRules: tally(list, 'msg') };
+    // Por puerto de destino, con sus orígenes: así Leo sabe quién toca cada puerto abierto.
+    const byPort = tally(list.filter((a) => a.dstPort), 'dstPort').map((p) => ({ ...p, sources: tally(list.filter((a) => a.dstPort === p.dstPort), 'src').slice(0, 3) }));
+    return { n: list.length, sources: topSources.length, topSources, topRules: tally(list, 'msg'), byPort };
   }
   // Un día con más de 500 corta la lista: el total sale del resumen, desde medianoche.
   const [h, m] = CLOCK.format(now).split(':').map(Number);

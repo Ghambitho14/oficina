@@ -3,7 +3,7 @@ import { activeAgents, monitorAgentsOn } from './agents/index.js';
 import { collectHost } from './collectors/host.js';
 import { collectDocker } from './collectors/docker.js';
 import { collectWeb } from './collectors/web.js';
-import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardCard } from './db.js';
+import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardKey } from './db.js';
 import { diagnose, parseSuggestions, modelOf, aiEnabledFor } from './ai.js';
 import { sendReport, telegramEnabled, ICON } from './notify/telegram.js';
 import { watchedPages } from './agents-file.js';
@@ -25,11 +25,14 @@ function worstOf(events) {
 }
 const eventLine = (e) => `${eventTitle(e)}${e.detail ? ` (${e.detail})` : ''}`;
 
-// Firma de un hallazgo sin los números (para "CPU alta: 91%" y "CPU alta: 93%" son el mismo problema).
-const keyOf = (f) => `${f.severity}:${f.title.replace(/\d+(\.\d+)?/g, '#')}`;
-
 // La pizarra junta un mismo problema aunque cambien sus números o su gravedad.
 const boardKey = (title) => title.replace(/\d+(\.\d+)?/g, '#');
+// Si el número sí distingue el problema (un puerto), el agente da su nombre fijo en `note`: así el puerto 6001 y el
+// 8000 son dos problemas, y revisar uno no calla al otro.
+export const findingKey = (f) => f.note || boardKey(f.title);
+
+// Firma de un hallazgo sin los números (para "CPU alta: 91%" y "CPU alta: 93%" son el mismo problema).
+const keyOf = (f) => `${f.severity}:${findingKey(f)}`;
 // Lo que el agente ve mal ahora. Una alerta solo suma tarjeta si su revisión no vio ya ese contenedor o dominio.
 function boardProblems(findings, events) {
   const own = findings.filter((f) => f.severity !== 'info' && !f.fromEvent);
@@ -38,7 +41,7 @@ function boardProblems(findings, events) {
   // Con la gravedad de la alerta si es mayor: así coincide con el color del informe de Telegram.
   const mine = own.map((f) => (serious.some((e) => about(f, e) && RANK[eventSeverity(e)] > RANK[f.severity]) ? { ...f, severity: 'crit' } : f));
   const alerts = serious.filter((e) => !own.some((f) => about(f, e))).map((e) => ({ title: eventTitle(e), detail: e.detail, severity: eventSeverity(e) }));
-  return [...mine, ...alerts].map(({ title, detail, severity }) => ({ key: boardKey(title), title, detail, severity }));
+  return [...mine, ...alerts].map((f) => ({ key: findingKey(f), title: f.title, detail: f.detail, severity: f.severity }));
 }
 const boardSuggestions = (list) => list.map((title) => ({ key: boardKey(title), title, severity: 'info' }));
 
@@ -51,7 +54,7 @@ const firstNumber = (title) => {
 function applyReviews(agentId, findings) {
   const reviewed = reviewedKeys(agentId);
   return findings.map((f) => {
-    const m = f.severity !== 'info' && !f.fromEvent ? reviewed.get(boardKey(f.title)) : null;
+    const m = f.severity !== 'info' && !f.fromEvent ? reviewed.get(findingKey(f)) : null;
     if (!m) return f;
     const now = firstNumber(f.title);
     if (now !== null && m.reviewedValue !== null && now > m.reviewedValue * 2)
@@ -60,13 +63,23 @@ function applyReviews(agentId, findings) {
   });
 }
 
-// El botón "Revisado" de la pizarra: el agente lo anota en su memoria y revisa de nuevo para actualizar su estado.
-export function reviewCard(card, note, user) {
-  saveReview({ agent: card.agent, kind: card.kind, key: card.key, title: card.title, note, user, value: firstNumber(card.title) });
-  removeBoardCard(card.id);
-  logActivity(card.agent, 'manual', `${user} marcó como revisado: ${card.title}. Lo anoté en mi memoria: ${note}`);
-  const agent = activeAgents().find((a) => a.id === card.agent);
+// El botón "Revisado" (en la pizarra o en el panel del agente): el agente lo anota en su memoria, la tarjeta sale de la
+// pizarra y revisa de nuevo para actualizar su estado.
+function review(agentId, { kind, key, title }, note, user) {
+  saveReview({ agent: agentId, kind, key, title, note, user, value: firstNumber(title) });
+  removeBoardKey(agentId, kind, key);
+  logActivity(agentId, 'manual', `${user} marcó como revisado: ${title}. Lo anoté en mi memoria: ${note}`);
+  const agent = activeAgents().find((a) => a.id === agentId);
   if (agent && !working.has(agent.id)) runAgent(agent, createContext()).catch(() => null);
+}
+export const reviewCard = (card, note, user) => review(card.agent, card, note, user);
+
+// Desde el panel: un aviso de su último reporte, por su título. Las alertas del monitor no se revisan (siempre llegan).
+export function reviewFinding(agentId, title, note, user) {
+  const f = latestReport(agentId)?.findings?.find((x) => x.title === title && x.severity !== 'info' && !x.fromEvent);
+  if (!f) return false;
+  review(agentId, { kind: 'problema', key: findingKey(f), title: f.title }, note, user);
+  return true;
 }
 
 // Firma de los hallazgos importantes: si no cambia, reutilizamos el diagnóstico anterior de la IA.
@@ -183,9 +196,9 @@ export async function runAgent(agent, ctx, input) {
     saveReport(agent.id, report);
     if (agent.schedule !== 'manual') {
       // Memoria: cuenta lo que apareció (otra vez) y da por terminado lo revisado que ya no está.
-      const seenBefore = new Set((previous?.findings || []).map((f) => boardKey(f.title)));
+      const seenBefore = new Set((previous?.findings || []).map(findingKey));
       for (const p of boardProblems(raw, events)) if (!seenBefore.has(p.key)) rememberSeen(agent.id, p.key, p.title);
-      closeReviews(agent.id, new Set(raw.map((f) => boardKey(f.title))));
+      closeReviews(agent.id, new Set(raw.map(findingKey)));
       syncBoard(agent.id, 'problema', boardProblems(findings, events));
       // Sin diagnóstico nuevo (la IA no respondió, una recuperación) quedan las sugerencias que ya estaban.
       if (!problems) syncBoard(agent.id, 'sugerencia', []);

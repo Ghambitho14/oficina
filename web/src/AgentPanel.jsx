@@ -466,7 +466,59 @@ function KeyFacts({ type, metrics }) {
 const MONITOR_PREFIX = 'Alerta del monitor — ';
 const RANK = { crit: 0, warn: 1, info: 2 };
 
-function FindingItem({ f }) {
+// "Revisado" con lo que se hizo: el agente lo anota en su memoria y deja de marcarlo, salvo que empeore o vuelva.
+// Las alertas del monitor no llevan el botón: siempre llegan.
+function ReviewFinding({ f, agent, onReviewed }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/agents/${agent.id}/review`, { method: 'POST', body: { title: f.title, note } });
+      setOpen(false);
+      onReviewed();
+    } catch (err) {
+      setError(err.message);
+    }
+    setBusy(false);
+  }
+
+  if (!open)
+    return (
+      <div className="row board-actions">
+        <span />
+        <button className="small-btn" onClick={() => setOpen(true)}>
+          Revisado
+        </button>
+      </div>
+    );
+  return (
+    <form className="board-review" onSubmit={save}>
+      <label>
+        ¿Qué se hizo? {agent.name} lo anota en su memoria.
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} maxLength={500} placeholder="Ej.: Es el panel de pruebas, lo abrí a propósito." autoFocus />
+      </label>
+      <div className="row">
+        {error ? <small className="error">{error}</small> : <span />}
+        <span className="row">
+          <button type="button" className="ghost small-btn" onClick={() => setOpen(false)} disabled={busy}>
+            Cancelar
+          </button>
+          <button className="small-btn" disabled={busy || !note.trim()}>
+            {busy ? 'Guardando…' : 'Guardar en su memoria'}
+          </button>
+        </span>
+      </div>
+    </form>
+  );
+}
+
+function FindingItem({ f, agent, onReviewed }) {
   const fromMonitor = f.fromEvent || f.title.startsWith(MONITOR_PREFIX);
   return (
     <li className={f.severity}>
@@ -484,12 +536,13 @@ function FindingItem({ f }) {
           </span>
         )}
         {f.detail && <p className="muted">{f.detail}</p>}
+        {onReviewed && f.severity !== 'info' && !fromMonitor && <ReviewFinding f={f} agent={agent} onReviewed={onReviewed} />}
       </div>
     </li>
   );
 }
 
-function Findings({ findings, title = 'Necesita tu atención' }) {
+function Findings({ findings, title = 'Necesita tu atención', agent, onReviewed }) {
   const sorted = [...findings].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const urgent = sorted.filter((f) => f.severity !== 'info');
   const info = sorted.filter((f) => f.severity === 'info');
@@ -498,8 +551,8 @@ function Findings({ findings, title = 'Necesita tu atención' }) {
       <h3>{title}</h3>
       {urgent.length ? (
         <ul className="findings">
-          {urgent.map((f, i) => (
-            <FindingItem key={i} f={f} />
+          {urgent.map((f) => (
+            <FindingItem key={f.title} f={f} agent={agent} onReviewed={onReviewed} />
           ))}
         </ul>
       ) : (
@@ -806,7 +859,16 @@ export default function AgentPanel({ agent, onBack, onRefresh, onOpen, ai }) {
       {!Work && report && (
         <>
           <KeyFacts type={agent.type} metrics={report.metrics} />
-          <Findings findings={report.findings} />
+          <Findings
+            findings={report.findings}
+            agent={agent}
+            onReviewed={() => {
+              // El agente vuelve a revisar al recibirlo: el reporte nuevo llega con el refresco.
+              setReload((r) => r + 1);
+              setTimeout(() => onRefresh?.(), 1500);
+              setTimeout(() => onRefresh?.(), 6000);
+            }}
+          />
           <Diagnosis report={report} agent={agent} />
           {Metrics && report.metrics && (
             <div className="agent-data">

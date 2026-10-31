@@ -94,6 +94,11 @@ case "$name" in
     ss -tnH state established | awk '{ a = $4; sub(/:[0-9]+$/, "", a); gsub(/[][]/, "", a); n[a]++ } END { for (a in n) print n[a], a }' |
       sort -rn | head -n 30
     ;;
+  conexiones_puertos)
+    # Conexiones TCP establecidas, contadas por puerto local e IP remota: "cantidad puerto ip".
+    ss -tnH state established | awk '{ p = $3; sub(/.*:/, "", p); a = $4; sub(/:[0-9]+$/, "", a); gsub(/[][]/, "", a); n[p " " a]++ } END { for (k in n) print n[k], k }' |
+      sort -rn | head -n 50
+    ;;
   ip)
     # Todo lo que el servidor sabe de una IP, en líneas "clave: valor" (las lee parseIp en server/collectors/ssh.js).
     snort=$({ cat /var/log/snort/snort.alert.fast; zcat -f /var/log/snort/snort.alert.fast.1.gz; } 2>/dev/null | grep -aF " $target:")

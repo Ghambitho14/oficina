@@ -5,9 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { QUERIES, TARGETS, parseIp, queriesFor, sshQuery } from '../collectors/ssh.js';
-import { parseSs } from '../collectors/ports.js';
+import { parseSs, parseConnections, parseProcConnections, hexIp } from '../collectors/ports.js';
 import { parseSsh } from '../collectors/sshlog.js';
-import { parseUpdates, snortIps, ipTitle, ipDetail } from '../agents/ciberseguridad.js';
+import { parseUpdates, snortIps, ipTitle, ipDetail, portUse } from '../agents/ciberseguridad.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -26,6 +26,45 @@ test('parseSs deja fuera lo que solo escucha en localhost', () => {
   ].join('\n');
   assert.deepEqual(parseSs(out).exposed, [22, 80, 443, 9000]);
   assert.deepEqual(parseSs('').exposed, []);
+});
+
+test('las conexiones por puerto dejan fuera las de la tailnet y redes privadas', () => {
+  const out = ['7 443 203.0.113.5', '2 6001 ::ffff:198.51.100.7', '3 6001 100.64.0.2', '1 22 192.168.1.10', 'basura', ''].join('\n');
+  assert.deepEqual(parseConnections(out), [
+    { port: 443, ip: '203.0.113.5', n: 7 },
+    { port: 6001, ip: '198.51.100.7', n: 2 },
+  ]);
+  // /proc/net/tcp: 203.0.113.5:51000 → puerto 6001 (0x1771), establecida (01); la escucha (0A) y localhost no cuentan.
+  const proc = [
+    '  sl  local_address rem_address   st',
+    '   0: 00000000:1771 00000000:0000 0A',
+    '   1: 0100A8C0:1771 057100CB:C738 01',
+    '   2: 0100007F:1771 0100007F:C739 01',
+  ].join('\n');
+  assert.deepEqual(parseProcConnections(proc), [{ port: 6001, ip: '203.0.113.5', n: 1 }]);
+  assert.equal(hexIp('0000000000000000FFFF0000057100CB'), '203.0.113.5');
+  assert.equal(hexIp('B80D0120000000000000000001000000'), '2001:db8::1');
+});
+
+test('Leo avisa de quién usa un puerto de más, cada puerto por su lado', () => {
+  const found = portUse(
+    [6001, 6002],
+    [{ dstPort: 6001, n: 4, sources: [{ src: '203.0.113.9', n: 4 }] }],
+    [
+      { port: 6002, ip: '198.51.100.7', n: 2 },
+      { port: 6002, ip: '203.0.113.5', n: 1 },
+      { port: 443, ip: '203.0.113.5', n: 9 },
+    ],
+  );
+  assert.deepEqual(
+    found.map((f) => [f.severity, f.title, f.note]),
+    [
+      ['warn', '4 alertas de Snort hoy contra el puerto 6001', 'Snort contra el puerto 6001'],
+      ['warn', '3 conexiones desde Internet al puerto 6002 ahora', 'Conexiones al puerto 6002'],
+    ],
+  );
+  assert.match(found[1].detail, /^Desde 198\.51\.100\.7 \(2\), 203\.0\.113\.5 \(1\)/);
+  assert.deepEqual(portUse([6001], undefined, []), []);
 });
 
 test('parseSsh entiende las líneas de journalctl -o short-iso', () => {

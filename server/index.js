@@ -6,7 +6,7 @@ import { catalog, activeAgents, allAgents, findAgent, agentForPuesto, idsForPues
 import { agentsFile, agentsFileStatus, legacyVars, TEMPLATE_PATH } from './agents-file.js';
 import { latestReport, history, recentAlerts, logActivity, addChatMessage, chatHistory, clearChat, recentReports, listBoard, dismissBoard, boardCard, listMemory, forgetMemory, countReportsSince, getSetting, setSetting, listLeads, updateLead, businessSummary, listActivity, latestSample, series, uptime, usageSummary, dbSizeMb, onActivity } from './db.js';
 import { login, logout, requireAuth, authConfigured } from './auth.js';
-import { startScheduler, runAll, runAgent, createContext, reviewCard, working, rounds } from './scheduler.js';
+import { startScheduler, runAll, runAgent, createContext, reviewCard, reviewFinding, working, rounds } from './scheduler.js';
 import { aiEnabled, aiEnabledFor, budget, chat, AiUnavailable, missingFor, modelOf, generalModel, chosenModels, setChosenModel } from './ai.js';
 import { providerList, refreshModels, resolveModel, allModels } from './providers.js';
 import { telegramEnabled, sendTest } from './notify/telegram.js';
@@ -104,13 +104,28 @@ app.get('/api/agents/:id', (req, res) => {
 app.get('/api/alerts', (_req, res) => res.json(recentAlerts()));
 
 // "Revisado": el agente anota en su memoria qué se hizo y la tarjeta sale de la pizarra.
+// La nota que escribió el dueño, o null si ya respondió con el error.
+function reviewNote(req, res) {
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+  if (!note) return void res.status(400).json({ error: 'Escribe qué se hizo: el agente lo anota en su memoria' });
+  if (note.length > 500) return void res.status(400).json({ error: 'Máximo 500 caracteres' });
+  return note;
+}
 app.post('/api/board/:id/review', (req, res) => {
   const card = boardCard(Number(req.params.id));
   if (!card) return res.status(404).json({ error: 'Esa tarjeta ya no está en la pizarra' });
-  const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
-  if (!note) return res.status(400).json({ error: 'Escribe qué se hizo: el agente lo anota en su memoria' });
-  if (note.length > 500) return res.status(400).json({ error: 'Máximo 500 caracteres' });
+  const note = reviewNote(req, res);
+  if (!note) return;
   reviewCard(card, note, req.user);
+  res.json({ ok: true });
+});
+// Lo mismo desde el panel del agente, para un aviso de su último reporte.
+app.post('/api/agents/:id/review', (req, res) => {
+  const agent = findAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agente no encontrado' });
+  const note = reviewNote(req, res);
+  if (!note) return;
+  if (!reviewFinding(agent.id, req.body?.title, note, req.user)) return res.status(404).json({ error: 'Ese aviso ya no está en su último reporte' });
   res.json({ ok: true });
 });
 

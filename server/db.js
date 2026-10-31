@@ -199,7 +199,7 @@ export function listBoard(agents) {
 export const dismissBoard = (id) => db.prepare("UPDATE board SET dismissed_at = datetime('now') WHERE id = ? AND dismissed_at IS NULL").run(id).changes > 0;
 
 export const boardCard = (id) => db.prepare('SELECT * FROM board WHERE id = ?').get(id);
-export const removeBoardCard = (id) => db.prepare('DELETE FROM board WHERE id = ?').run(id);
+export const removeBoardKey = (agent, kind, key) => db.prepare('DELETE FROM board WHERE agent = ? AND kind = ? AND key = ?').run(agent, kind, key);
 
 // ---------- Memoria de los agentes ----------
 

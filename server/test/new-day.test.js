@@ -36,7 +36,13 @@ test('el día se corta a medianoche en la zona de la Oficina, no en UTC', () => 
 test('fetchSnortToday cuenta solo lo de hoy, con la forma del resumen del monitor', async () => {
   monitor.state.snort = 3;
   monitor.state.snortYesterday = 405;
-  assert.deepEqual(await fetchSnortToday(), { n: 3, sources: 1, topSources: [{ src: '203.0.113.9', n: 3 }], topRules: [{ msg: 'ET SCAN', n: 3 }] });
+  assert.deepEqual(await fetchSnortToday(), {
+    n: 3,
+    sources: 1,
+    topSources: [{ src: '203.0.113.9', n: 3 }],
+    topRules: [{ msg: 'ET SCAN', n: 3 }],
+    byPort: [{ dstPort: 443, n: 3, sources: [{ src: '203.0.113.9', n: 3 }] }],
+  });
 });
 
 test('un día con más de 500 alertas toma el total del resumen', async () => {
