@@ -191,7 +191,7 @@ button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2p
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; transition: none !important; } }
 
 /* Página de una sección: ocupa el ancho disponible, con un tope para que se lea cómodo. */
-.page { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.page { min-width: 0; min-height: 0; }
 .page-body { max-width: 960px; margin: 0 auto; display: grid; gap: 16px; }
 .panel h2 { font-size: 1.4rem; }
 .panel .back { margin-bottom: 12px; }
@@ -201,6 +201,9 @@ button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2p
   .app { height: max(560px, 100vh); height: max(560px, 100dvh); }
   .layout { flex: 1 1 auto; min-height: 0; }
   .room, .page { flex: 1 1 auto; min-height: 0; }
+  /* Solo aquí la página tiene su propio scroll. En celular baja la ventana entera: con "contain" ahí, el scroll no
+     pasaba a la ventana y no se podía bajar. */
+  .page { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .scene { flex: 1 1 auto; height: auto; min-height: 0; }
   .menu-btn, .drawer-backdrop { display: none; }
 
