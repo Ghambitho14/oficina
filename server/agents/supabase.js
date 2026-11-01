@@ -5,8 +5,6 @@ import { shortName } from '../collectors/docker.js';
 
 export default {
   id: 'supabase',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: Supabase self-hosted (Kong, Auth/GoTrue, PostgREST, Realtime, Storage, Studio y Postgres). Sabes qué contenedor sirve cada API, que si cae la base fallan todos en cascada y que un Studio abierto o una service_role expuesta es lo más grave: dan acceso total a los datos. Comandos que conoces: docker ps --filter name=supabase, docker logs --tail 100 supabase-auth, docker logs --tail 100 supabase-db.',
   floor: 'infra',
   schedule: 'auto',
 

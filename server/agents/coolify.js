@@ -5,8 +5,6 @@ const hoursSince = (iso) => (Date.now() - new Date(iso.includes('T') || iso.incl
 
 export default {
   id: 'coolify',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: Coolify, las apps y bases de datos que despliega y sus backups. En Coolify se reinicia, se redeploya y se leen los logs desde su panel (no hace falta docker a mano). Un backup que solo queda en el mismo VPS no protege de perder el VPS, y uno que nunca se probó restaurar no es garantía. Prioridad: backups fallidos o viejos de bases con datos, después apps caídas, después el resto.',
   floor: 'infra',
   schedule: 'auto',
 

@@ -38,6 +38,7 @@ Al lado de la oficina hay un **panel con pestañas**:
 | **Sofía** | Logs de apps | Lee los logs de cada contenedor desde la revisión anterior y cuenta errores, excepciones y respuestas 5xx; agrupa los mensajes repetidos y oculta contraseñas, tokens y emails |
 | **Tomás** | Coolify y backups | Contenedores del propio Coolify; con un token de solo lectura, el estado de apps, servicios y bases de datos, y si cada base tiene backups programados, si el último falló o si es muy viejo |
 | **Valeria** | Supabase | Contenedores de Supabase (caídos, *unhealthy*, reinicios), que Auth y la API REST respondan y que **Studio no esté abierto sin contraseña** |
+| **Marco** | Coordinación | Te responde por tu chat privado de Telegram, le pregunta al equipo, pide revisiones y propone pasar lo difícil a Claude Code |
 
 Cada revisión (cada 5 minutos por defecto) produce hallazgos con reglas fijas. Si configuras una API key
 de Anthropic, Claude además redacta un **diagnóstico en español** con acciones concretas.
@@ -134,6 +135,13 @@ casos:
 Las alertas del monitor siempre llegan, aunque el problema esté revisado. La memoria también se le pasa a la IA en cada
 diagnóstico y en el chat.
 
+Al diagnosticar, cada agente de infraestructura ve además:
+
+- **Su tendencia:** el estado de sus últimas 6 revisiones y las cifras que cambiaron (p. ej. `host.diskPercent: 70 → 78 → 85`),
+  para decir si es un pico, algo que viene subiendo o algo sostenido.
+- **A sus compañeros:** el estado y los problemas principales de los demás agentes de infraestructura, para conectar
+  causas comunes (una base caída se ve en los logs, en los reinicios y en Supabase a la vez).
+
 Cada puerto abierto de más es un problema aparte: revisar el 6001 no calla al 6002 ni a uno que se abra después. Un
 puerto revisado sigue vigilado: Leo avisa si hoy hay alertas de Snort contra él o si, al revisar, hay conexiones desde
 Internet (sin contar tu tailnet ni redes privadas). Por SSH esto último usa la consulta `conexiones_puertos`: copia de
@@ -141,7 +149,8 @@ nuevo `scripts/oficina-ssh.sh` al servidor. Si agregas el puerto a `vigila.puert
 
 ### Para ahorrar tokens
 
-- Por defecto usa `claude-haiku-5-5` (el modelo más barato) con esfuerzo bajo.
+- Por defecto usa `claude-haiku-5-5` (el modelo más barato) con esfuerzo bajo, y medio solo cuando hay un problema
+  crítico o una alerta del monitor (se cambia con `esfuerzo` en `agentes.json`).
 - **Solo se llama a la IA cuando cambian los hallazgos.** Si el disco sigue al 88 % durante horas, se
   reutiliza el diagnóstico anterior. Si todo está bien, no se llama.
 - Telegram solo avisa cuando un agente **cambia** de estado (ok → atención, atención → ok…).
@@ -250,8 +259,77 @@ el mínimo; solo `activo: false` lo apaga. "Revisar ahora" de la barra manda un 
 4. Pon `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en el `.env` (o en Coolify) y reinicia.
 5. En **Ajustes › Agentes**, toca **Probar Telegram**.
 
+Para que el coordinador te hable por **chat privado** y solo te obedezca a ti:
+
+1. Habla con **@userinfobot** en Telegram y copia tu `id` (un número).
+2. Pon `TELEGRAM_OWNER_ID=<tu id>` en el `.env`.
+3. Escribele algo a tu bot por privado. Marco responderá solo ahí; los informes de los agentes siguen yendo al grupo.
+
 Si tu container-monitor también manda su propio Telegram, te llegan dos mensajes por alerta: el del monitor (en
 bruto) y el del agente (investigado). Puedes apagar el del monitor.
+
+### Coordinador por Telegram
+
+**Marco** (o el nombre que le pongas en `agentes.json`) es el jefe del equipo. Habla contigo por tu chat privado
+con el bot:
+
+- Le puedes preguntar **cómo está el servidor**, **qué deberías arreglar primero** o **qué vio algún agente**.
+- Puedes pedirle **"que Leo revise ahora"** o **"que Ana revise"**: él les pide una revisión y su informe completo
+  llega al grupo de Telegram, mientras que a ti te da un resumen.
+- Si algo necesita investigar a fondo, revisar archivos o cambiar configuración, te propone **pasárselo a Claude
+  Code** con dos botones: **Pasárselo a Claude** / **No**.
+
+Marco nunca ejecuta nada. Claude Code corre fuera del contenedor, en el servidor, y solo actúa si tú tocas
+**Aprobar**.
+
+### Encargos a Claude Code (opcional)
+
+Si configuras `ENCARGOS_DIR`, Marco puede proponerte tareas difíciles para Claude Code. La Oficina solo deja
+archivos en esa carpeta; el **puente** (`puente/claude-puente.js`) es quien corre `claude` fuera del contenedor:
+
+1. Tocas **Pasárselo a Claude** en Telegram.
+2. La Oficina crea `ENCARGOS_DIR/pendientes/<id>.investigar.json`.
+3. El puente lo toma y ejecuta `claude -p <tarea> --permission-mode plan`. Claude investiga sin cambiar nada.
+4. La Oficina lee `ENCARGOS_DIR/hechos/<id>.investigar.json` y te manda la propuesta con los botones
+   **Aprobar** / **Descartar**.
+5. Si tocas **Aprobar**, el puente retoma la misma sesión (`claude -p … --resume <sesion> --permission-mode acceptEdits`),
+   con los permisos de `CLAUDE_WORKDIR/.claude/settings.json`. Lo que no esté permitido se niega y Claude te dice
+   qué faltó. Edita esa lista a tu gusto: la plantilla solo deja leer y niega lo destructivo.
+6. Te llega el resultado por Telegram.
+
+Para instalar el puente en el servidor (como usuario `ghambitho` o el tuyo):
+
+```bash
+# 1. Revisa que claude esté logueado
+claude -p "hola"
+
+# 2. Crea la carpeta de encargos (antes de levantar la Oficina: si la crea Docker, queda de root)
+#    y la de trabajo de Claude con las plantillas
+mkdir -p ~/HomaLab/encargos ~/oficina-claude/.claude
+cp puente/plantillas/CLAUDE.md ~/oficina-claude/CLAUDE.md
+cp puente/plantillas/settings.json ~/oficina-claude/.claude/settings.json
+
+# 3. Instala el servicio systemd --user
+mkdir -p ~/.config/systemd/user
+cp puente/claude-puente.service ~/.config/systemd/user/
+# Edita el .service para que las rutas coincidan con tu usuario y la ubicación del repo.
+systemctl --user daemon-reload
+systemctl --user enable --now claude-puente
+
+# 4. Para que siga corriendo después de cerrar sesión (una sola vez, pide sudo):
+sudo loginctl enable-linger $USER
+```
+
+Variables del `.env`:
+
+```bash
+ENCARGOS_DIR=/encargos          # dentro del contenedor; en el host es ENCARGOS_HOST_DIR (por defecto ./encargos)
+CLAUDE_TIMEOUT_MIN=20           # minutos antes de dar un encargo por perdido
+ENCARGOS_POLL_SEC=10            # cada cuánto revisa la Oficina si el puente respondió
+```
+
+Para probar en tu PC sin el servidor real, apunta `CLAUDE_BIN` a un script falso y `CLAUDE_WORKDIR` a una
+carpeta temporal. Los tests (`puente.test.js`) hacen exactamente eso.
 
 ### Requisitos del VPS
 
@@ -368,10 +446,14 @@ Cada agente admite:
 | `activo` | `true` o `false`. Apagado no aparece ni trabaja; sus alertas las atiende `alertaSinDueño`. |
 | `nombre`, `puesto`, `descripcion` | Cómo se llama y cómo se presenta. |
 | `personalidad` | Cómo te habla cuando usa la IA. Solo cambia la forma de hablar, nunca sus reglas. |
+| `especialidad` | Lo que sabe de su oficio (va en sus instrucciones para la IA). |
+| `instrucciones` | Cómo hace su trabajo (el diagnóstico, las ideas o la búsqueda): una lista de reglas, una por línea. |
+| `instruccionesChat` | Cómo responde en el chat: una lista de reglas. |
 | `contexto` | Lo que debe saber de tu servidor, p. ej. "backup-x se reinicia a propósito a las 4 am". Se le pasa a la IA. |
 | `guia` | Un archivo con reglas largas, relativo a `config/`, p. ej. `guias/marca.md`. Se le pasa a la IA (máximo 6000 caracteres) y se relee al cambiar. Queda fuera de git. |
 | `color`, `pelo`, `piel` | Colores como `#3b82f6` (pelo y piel vacíos = automático). |
 | `modelo`, `tokensDiarios` | Su IA y su tope diario (vacío / 0 = los generales). |
+| `esfuerzo` | Cuánto piensa la IA con modelos de Claude: `low`, `medium`, `high` o `auto` (poco, y más con un problema crítico o una alerta del monitor). Los demás proveedores lo ignoran. |
 | `alertas` | Qué tipos de alerta del monitor atiende: `["container_*", "snort"]` (`*` al final es comodín). |
 | `vigila` | Sus umbrales: Ana `cpu`, `ram`, `disco`, `paginaLentaMs`; Leo `intentosSsh`, `alertasSnort`, `diasCertificado`, `puertosPermitidos`; Sofía `errores`; Tomás `horasBackup`; Valeria `apiLentaMs`. |
 | `telegram` | `{ "activo": true, "minimo": "ok" }` (ver Telegram). |

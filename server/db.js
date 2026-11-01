@@ -126,6 +126,19 @@ db.exec(`
     acknowledged INTEGER NOT NULL DEFAULT 0,
     UNIQUE (agent, kind, key)
   );
+  -- Encargos a Claude Code: propuesto → investigando → propuesta_lista → ejecutando → hecho (o descartado / error).
+  CREATE TABLE IF NOT EXISTS encargos (
+    id TEXT PRIMARY KEY,
+    agent TEXT NOT NULL,
+    tarea TEXT NOT NULL,
+    motivo TEXT,
+    estado TEXT NOT NULL DEFAULT 'propuesto',
+    resultado TEXT,
+    error TEXT,
+    costo REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ---------- Reportes y alertas ----------
@@ -396,6 +409,41 @@ export const getSetting = (key) => db.prepare('SELECT value FROM settings WHERE 
 export function setSetting(key, value) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
 }
+
+// ---------- Encargos a Claude Code ----------
+
+const ENCARGO_COLUMNS = 'id, agent, tarea, motivo, estado, resultado, error, costo, created_at AS createdAt, updated_at AS updatedAt';
+
+export function addEncargo({ id, agent, tarea, motivo }) {
+  db.prepare('INSERT INTO encargos (id, agent, tarea, motivo) VALUES (?, ?, ?, ?)').run(id, agent, tarea, motivo || null);
+}
+
+export const getEncargo = (id) => db.prepare(`SELECT ${ENCARGO_COLUMNS} FROM encargos WHERE id = ?`).get(id) ?? null;
+
+// Pasa de un estado a otro solo si sigue en `from`: así un botón tocado dos veces no hace nada la segunda vez.
+export const moveEncargo = (id, from, to) =>
+  db.prepare("UPDATE encargos SET estado = ?, updated_at = datetime('now') WHERE id = ? AND estado = ?").run(to, id, from).changes > 0;
+
+export function finishEncargo(id, { estado, resultado = null, error = null, costo = null }) {
+  db.prepare("UPDATE encargos SET estado = ?, resultado = coalesce(?, resultado), error = ?, costo = coalesce(?, 0) + coalesce(costo, 0), updated_at = datetime('now') WHERE id = ?").run(
+    estado,
+    resultado,
+    error,
+    costo,
+    id,
+  );
+}
+
+export const encargosEn = (estados) =>
+  db.prepare(`SELECT ${ENCARGO_COLUMNS} FROM encargos WHERE estado IN (${estados.map(() => '?').join(',')}) ORDER BY created_at`).all(...estados);
+
+// Los que llevan más de `minutes` en ese estado sin respuesta del puente.
+export const staleEncargos = (estados, minutes) =>
+  db
+    .prepare(`SELECT ${ENCARGO_COLUMNS} FROM encargos WHERE estado IN (${estados.map(() => '?').join(',')}) AND updated_at < datetime('now', ?)`)
+    .all(...estados, `-${minutes} minutes`);
+
+export const recentEncargos = (limit = 5) => db.prepare(`SELECT ${ENCARGO_COLUMNS} FROM encargos ORDER BY created_at DESC LIMIT ?`).all(limit);
 
 // ---------- Prospectos ----------
 

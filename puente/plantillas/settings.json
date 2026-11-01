@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "WebSearch",
+      "WebFetch",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker stats:*)",
+      "Bash(docker system df:*)",
+      "Bash(df:*)",
+      "Bash(free:*)",
+      "Bash(npm test:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)",
+      "Bash(git push:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker system prune:*)",
+      "Bash(ssh root@:*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.oficina-ssh/**)",
+      "Read(**/.env)",
+      "Read(**/.env.*)"
+    ]
+  }
+}

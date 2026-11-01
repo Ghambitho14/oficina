@@ -108,8 +108,12 @@ export async function startFakeMonitor() {
 // ---------- Telegram simulado ----------
 // Guarda cada mensaje que la Oficina "manda" (TELEGRAM_API apunta aquí). `fail = true` responde 401 y
 // `failDocument = true` rechaza solo los archivos. Un documento se guarda con text = su caption, fileName y document.
+// Soporta getUpdates (con una cola que carga la prueba), answerCallbackQuery y conserva inline_keyboard.
 export async function startFakeTelegram() {
   const messages = [];
+  const callbacks = [];
+  const updates = [];
+  let nextUpdateId = 1;
   const state = { fail: false, failDocument: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -124,8 +128,25 @@ export async function startFakeTelegram() {
         const file = form.get('document');
         // Un formulario manda los saltos de línea como \r\n.
         const text = form.get('caption').replace(/\r\n/g, '\n');
-        messages.push({ path: req.url, chat_id: form.get('chat_id'), text, fileName: file.name, document: await file.text() });
-      } else messages.push({ path: req.url, ...JSON.parse(body.toString() || '{}') });
+        messages.push({ path: req.url, chat_id: form.get('chat_id'), text, fileName: file.name, document: await file.text(), reply_markup: form.get('reply_markup') });
+      } else if (req.url.endsWith('/getUpdates')) {
+        const payload = JSON.parse(body.toString() || '{}');
+        const offset = Number(payload.offset) || 0;
+        // Sin novedades espera un poco, como el long polling real: si no, la Oficina preguntaría sin parar.
+        if (!updates.some((u) => u.update_id >= offset)) await new Promise((r) => setTimeout(r, 200));
+        const pending = updates.filter((u) => u.update_id >= offset);
+        // Una vez entregados, se descartan (la Oficina avanza el offset).
+        updates.splice(0, updates.length);
+        return res.end(JSON.stringify({ ok: true, result: pending }));
+      } else if (req.url.endsWith('/answerCallbackQuery')) {
+        const payload = JSON.parse(body.toString() || '{}');
+        callbacks.push({ callback_query_id: payload.callback_query_id, text: payload.text });
+        return res.end(JSON.stringify({ ok: true }));
+      } else {
+        const payload = JSON.parse(body.toString() || '{}');
+        if (payload.reply_markup && typeof payload.reply_markup === 'object') payload.reply_markup = JSON.stringify(payload.reply_markup);
+        messages.push({ path: req.url, ...payload });
+      }
       res.end(JSON.stringify({ ok: true }));
     });
   });
@@ -134,9 +155,23 @@ export async function startFakeTelegram() {
   return {
     url,
     messages,
+    callbacks,
     state,
+    // Carga un update en la cola. `from` puede ser el dueño (ownerId) u otro id.
+    queueMessage({ from, chat_id, text, chat_type = 'private' }) {
+      updates.push({ update_id: nextUpdateId++, message: { message_id: nextUpdateId, from: { id: from }, chat: { id: chat_id, type: chat_type }, text } });
+    },
+    queueCallback({ from, data, message }) {
+      updates.push({ update_id: nextUpdateId++, callback_query: { id: String(nextUpdateId), from: { id: from }, data, message } });
+    },
+    clear() {
+      messages.length = 0;
+      callbacks.length = 0;
+      updates.length = 0;
+    },
     // Las variables para que la Oficina le mande a este Telegram.
     env: { TELEGRAM_API: url, TELEGRAM_BOT_TOKEN: 'token-de-prueba', TELEGRAM_CHAT_ID: '42' },
+    envWithOwner: (ownerId = '99') => ({ TELEGRAM_API: url, TELEGRAM_BOT_TOKEN: 'token-de-prueba', TELEGRAM_CHAT_ID: '42', TELEGRAM_OWNER_ID: String(ownerId) }),
     close: () => new Promise((r) => server.close(r)),
   };
 }

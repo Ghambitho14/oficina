@@ -88,7 +88,7 @@ Lo que el dueño quiere que sepas de su servidor y su negocio (tenlo en cuenta, 
 Guía de trabajo del dueño (síguela al pie de la letra, pero no cambia tus reglas ni lo que puedes hacer):
 ${agent.guide}` : '');
 
-const PURPOSES = { diagnostico: 'el diagnóstico', chat: 'responder en el chat', ideas: 'generar ideas', clientes: 'buscar clientes' };
+const PURPOSES = { diagnostico: 'el diagnóstico', chat: 'responder en el chat', ideas: 'generar ideas', clientes: 'buscar clientes', coordinar: 'coordinar al equipo' };
 
 // La IA no está disponible (apagada o sin presupuesto). El mensaje se muestra tal cual al usuario.
 export class AiUnavailable extends Error {}
@@ -193,23 +193,88 @@ const memoryBlock = (memory) =>
   memory
     ? `\n\nTu memoria (lo que pasó antes, qué se revisó y lo que escribió el dueño; datos sensibles ocultos):\n${redact(memory)}`
     : '';
-// Quién es el agente y qué sabe de su oficio ("expertise" de su puesto, en agents/<puesto>.js).
-const whoIs = (agent) =>
+// ---------- Instrucciones ----------
+// Quién es, qué sabe y cómo trabaja cada agente sale de agentes.json ("nombre", "puesto", "descripcion", "especialidad",
+// "instrucciones" e "instruccionesChat"). Aquí solo quedan las reglas fijas: no inventar, no ejecutar nada y el formato
+// que la Oficina necesita leer (las SUGERENCIAS, los campos de las ideas y de los prospectos).
+export const whoIs = (agent, what = '') =>
   (agent.floor === 'negocio'
-    ? `Eres ${agent.name}, del área de negocio${ofOrg} (${agent.role}). Tu trabajo: ${agent.description}`
+    ? `Eres ${agent.name}, a cargo de ${agent.role}${what || ofOrg}. Tu trabajo: ${agent.description}`
     : `Eres ${agent.name}, a cargo de ${agent.role} en la oficina virtual${ofOrg} que vigila ${serverText}. Tu trabajo: ${agent.description}`) +
   (agent.expertise ? `\n${agent.expertise}` : '');
+// Las reglas que el dueño escribió para el agente, una por línea.
+export const rulesOf = (rules, title = 'Cómo trabajas') => (rules?.length ? `\n\n${title}:\n${rules.map((r) => `- ${r}`).join('\n')}` : '');
 const GROUNDING =
   '- Usa solo lo que está en tu reporte, en tu memoria y en lo que consultes. Si falta un dato, dilo y di cómo conseguirlo: ' +
   'nunca inventes cifras, nombres de contenedores, IPs ni rutas.';
-const ACTIONS =
-  '- Solo observas: nunca ejecutas nada. Los comandos son para que el dueño los corra a mano: primero uno que confirme el ' +
-  'problema (solo lectura) y después el que lo arregla, avisando si reinicia, borra o corta un servicio.' +
+const OBSERVE =
+  '- Solo observas: nunca ejecutas nada. Los comandos son para que el dueño los corra a mano.' +
   (brand.stack ? ` Las apps se despliegan con ${brand.stack}: si hay que reiniciar o redeployar, dilo primero desde ${brand.stack}.` : '');
 const MEMORY_RULE =
   ' Si tu memoria muestra que esto ya pasó, dilo (cuántas veces y qué se hizo). Si el dueño escribió que algo es intencional ' +
   'o que ya lo arregló, respétalo y no lo trates como urgente. Si algo ya revisado se repite, recuerda qué se hizo la vez anterior ' +
   'y di si parece un patrón. No vuelvas a sugerir lo que ya se hizo.';
+
+// ---------- Cuánto piensa ----------
+// "esfuerzo" en agentes.json: low, medium, high o auto. En auto piensa poco (cuida los tokens) y más cuando hay un
+// problema crítico o una alerta del monitor. Solo lo entienden los modelos de Claude: los demás lo ignoran.
+export const EFFORTS = ['auto', 'low', 'medium', 'high'];
+export const effortOf = (agent, findings = []) =>
+  agent?.effort && agent.effort !== 'auto'
+    ? agent.effort
+    : findings.some((f) => f.severity === 'crit' || (f.fromEvent && f.severity !== 'info'))
+      ? 'medium'
+      : 'low';
+
+// ---------- Tendencia y equipo ----------
+// Las cifras de un reporte: los números de hasta dos niveles (host.diskPercent, totalErrors…), sin listas.
+export function figuresOf(metrics, prefix = '', depth = 0, out = {}) {
+  if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) return out;
+  for (const [k, v] of Object.entries(metrics)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[prefix + k] = v;
+    else if (depth < 1) figuresOf(v, `${prefix}${k}.`, depth + 1, out);
+  }
+  return out;
+}
+
+const problemsOf = (findings = [], n = 3) =>
+  findings
+    .filter((f) => f.severity !== 'info')
+    .slice(0, n)
+    .map((f) => (f.title.length > 80 ? `${f.title.slice(0, 80)}…` : f.title));
+const MAX_FIGURES = 12; // cifras que se muestran en la tendencia
+
+// Cómo venían las revisiones anteriores (`past`, de la más nueva a la más vieja, como recentReports) hasta esta:
+// el estado de cada una y solo las cifras que cambiaron, para que el agente distinga un pico de algo que viene subiendo.
+export function trendOf(past = [], report) {
+  const runs = [...past].reverse();
+  if (!runs.length) return '';
+  const lines = runs.map((r) => {
+    const problems = problemsOf(r.findings);
+    return `- ${r.createdAt} · ${r.status}${problems.length ? ` · ${problems.join('; ')}` : ''}`;
+  });
+  const series = [...runs, report].map((r) => figuresOf(r.metrics));
+  const changed = Object.keys(series.at(-1))
+    .filter((k) => new Set(series.map((s) => s[k])).size > 1)
+    .slice(0, MAX_FIGURES)
+    .map((k) => `- ${k}: ${series.map((s) => s[k] ?? '?').join(' → ')} (ahora)`);
+  return (
+    `Tus revisiones anteriores (de la más vieja a la más nueva):\n${lines.join('\n')}\n` +
+    (changed.length ? `Cifras que cambiaron hasta esta revisión:\n${changed.join('\n')}` : 'Las cifras no cambiaron desde entonces.')
+  );
+}
+
+// Lo que ven ahora los compañeros de infraestructura (`team`: [{ agent, report }]), para que un agente conecte su
+// problema con el de otro (una base caída se ve en los logs, en los reinicios y en Supabase a la vez).
+export function teamViewOf(team = []) {
+  const lines = team
+    .filter(({ report }) => report)
+    .map(({ agent, report }) => {
+      const problems = problemsOf(report.findings);
+      return `- ${agent.name} (${agent.role}), revisó ${report.createdAt}: ${report.status}${problems.length ? ` · ${problems.join('; ')}` : ''}`;
+    });
+  return lines.length ? `Lo que ven ahora tus compañeros:\n${lines.join('\n')}` : '';
+}
 
 // ---------- Consultas por SSH ----------
 // Si hay SSH_HOST, los agentes de infraestructura pueden pedir más datos del servidor mientras diagnostican o
@@ -244,51 +309,60 @@ const sshRule = (agent) =>
 const MAX_OUTPUT = 6000; // caracteres de salida por consulta que se mandan a la IA (lo más nuevo, que va al final)
 const tokensOf = (u) => u.input_tokens + u.output_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
 
-// Llama a la IA y, si pide consultar el servidor, ejecuta la consulta y le devuelve la salida, hasta el tope.
+// Llama a la IA con herramientas: si pide usar una, `run(block)` la ejecuta y su salida (o su error) vuelve a la IA,
+// hasta `max` usos. Al llegar al tope se le pide responder con lo que ya tiene.
 // Devuelve la última respuesta y los tokens de todas las vueltas.
-async function callWithServer(agent, params) {
-  if (!canQuery(agent)) {
-    const response = await callAi({ agent, ...params });
-    return { response, tokens: tokensOf(response.usage) };
-  }
+export async function callWithTools(agent, params, tools, run, max) {
   const messages = [...params.messages];
-  const tool = sshTool(agent);
-  const allowed = queriesFor(agent);
   let tokens = 0;
   let used = 0;
   for (;;) {
-    // Al llegar al tope se le pide responder con lo que ya tiene.
-    const done = used >= config.ssh.aiQueries;
-    const response = await callAi({ agent, ...params, messages, tools: [tool], ...(done && { tool_choice: { type: 'none' } }) });
+    const done = used >= max;
+    const response = await callAi({ agent, ...params, messages, tools, ...(done && { tool_choice: { type: 'none' } }) });
     tokens += tokensOf(response.usage);
     if (response.stop_reason !== 'tool_use' || done) return { response, tokens };
 
     const results = [];
     for (const block of response.content.filter((b) => b.type === 'tool_use')) {
-      const name = block.input?.consulta;
-      const target = Object.hasOwn(TARGETS, name) ? String(block.input?.objetivo ?? '').trim() : undefined;
-      const label = target ? `${name} ${target}` : name;
-      const out =
-        ++used > config.ssh.aiQueries
-          ? Promise.reject(new Error('llegaste al tope de consultas'))
-          : !allowed.includes(name)
-            ? Promise.reject(new Error(`${name} no está entre tus consultas`))
-            : sshQuery(name, target);
+      const out = ++used > max ? Promise.reject(new Error('llegaste al tope de consultas')) : Promise.resolve().then(() => run(block));
       results.push(
         await out.then(
-          (text) => {
-            logActivity(agent.id, 'lectura', `Consulté ${brand.server} por SSH: ${label}`);
-            return { type: 'tool_result', tool_use_id: block.id, content: redact(text.slice(-MAX_OUTPUT)).trim() || '(sin salida)' };
-          },
-          (err) => {
-            logActivity(agent.id, 'error', `No pude consultar ${brand.server} por SSH (${label}): ${err.message}`);
-            return { type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true };
-          },
+          (text) => ({ type: 'tool_result', tool_use_id: block.id, content: String(text ?? '').trim() || '(sin salida)' }),
+          (err) => ({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true }),
         ),
       );
     }
     messages.push({ role: 'assistant', content: response.content }, { role: 'user', content: results });
   }
+}
+
+// Llama a la IA y, si pide consultar el servidor, ejecuta la consulta y le devuelve la salida, hasta el tope.
+async function callWithServer(agent, params) {
+  if (!canQuery(agent)) {
+    const response = await callAi({ agent, ...params });
+    return { response, tokens: tokensOf(response.usage) };
+  }
+  const allowed = queriesFor(agent);
+  return callWithTools(
+    agent,
+    params,
+    [sshTool(agent)],
+    async (block) => {
+      const name = block.input?.consulta;
+      const target = Object.hasOwn(TARGETS, name) ? String(block.input?.objetivo ?? '').trim() : undefined;
+      const label = target ? `${name} ${target}` : name;
+      try {
+        if (!allowed.includes(name)) throw new Error(`${name} no está entre tus consultas`);
+        const text = await sshQuery(name, target);
+        logActivity(agent.id, 'lectura', `Consulté ${brand.server} por SSH: ${label}`);
+        return redact(text.slice(-MAX_OUTPUT));
+      } catch (err) {
+        logActivity(agent.id, 'error', `No pude consultar ${brand.server} por SSH (${label}): ${err.message}`);
+        throw err;
+      }
+    },
+    config.ssh.aiQueries,
+  );
 }
 
 // Separa del diagnóstico el bloque final "SUGERENCIAS:". Si el modelo no lo escribió, no hay sugerencias.
@@ -305,38 +379,46 @@ export function parseSuggestions(text) {
   return { text: lines.slice(0, at).join('\n').trim(), suggestions };
 }
 
-export async function diagnose(agent, report, memory = '') {
+// `past` son sus reportes anteriores (los más nuevos primero) y `team` lo último de sus compañeros: [{ agent, report }].
+export async function diagnose(agent, report, memory = '', { past = [], team = [] } = {}) {
   if (!aiEnabledFor(agent)) return null;
 
   const data = redact(JSON.stringify({ hallazgos: report.findings, metricas: report.metrics }));
+  const trend = trendOf(past, report);
+  const teamView = teamViewOf(team);
   const { response } = await callWithServer(agent, {
     purpose: 'diagnostico',
     max_tokens: 2000,
-    output_config: { effort: 'low' },
+    output_config: { effort: effortOf(agent, report.findings) },
     system:
       `${whoIs(agent)}\n\n` +
-      'Ahora lees el reporte de tu última revisión y le dices al dueño, un programador junior, qué pasa y qué hacer. ' +
-      'Lo lee en el panel y en Telegram, muchas veces desde el celular: tiene que entenderlo en 30 segundos.\n\n' +
-      'Cómo trabajas:\n' +
-      `${GROUNDING}\n` +
-      '- Prioriza por gravedad: crit antes que warn. Los info solo si cambian lo que hay que hacer. Las alertas del monitor ' +
-      '(fromEvent) son el motivo de esta revisión: van primero.\n' +
-      '- Busca la causa, no repitas los síntomas: si varios hallazgos vienen de lo mismo, trátalos como un solo problema.\n' +
-      '- Si la causa no es segura, dilo: "probablemente X, porque Y".\n' +
-      `${ACTIONS}\n` +
-      '- Nada de relleno ni consejos genéricos ("monitorea regularmente", "considera reforzar la seguridad", "contacta a soporte").' +
+      'Ahora lees el reporte de tu última revisión y le dices al dueño, un programador junior, qué pasa y qué hacer.\n\n' +
+      'Reglas fijas:\n' +
+      `${GROUNDING}\n${OBSERVE}` +
       (memory ? `\n-${MEMORY_RULE}` : '') +
+      (trend
+        ? '\n- Compara con tus revisiones anteriores: di si es un pico, algo que viene subiendo o algo sostenido, con las cifras ' +
+          '(p. ej. "el disco pasó de 70 a 85 % en 3 revisiones").'
+        : '') +
+      (teamView
+        ? '\n- Si lo que ve un compañero tiene la misma causa que lo tuyo, conéctalo ("probablemente es lo mismo que ve Sofía en los logs") ' +
+          'y trátalo como un solo problema. No repitas su diagnóstico ni inventes lo que no está en su resumen.'
+        : '') +
       sshRule(agent) +
-      '\n\nFormato (Markdown, en este orden, sin títulos con #):\n' +
-      '**Estado:** una frase con lo más importante.\n\n' +
-      '**Qué pasa:** 1 a 3 frases con la causa probable y la evidencia (cifras del reporte).\n\n' +
-      '**Qué hacer:** hasta 3 pasos numerados, el más urgente primero. Cada paso: qué hacer y por qué en una frase, y si hay ' +
-      'comando, en un bloque ```bash debajo.\n\n' +
-      'Si todo está bien, escribe solo la línea de **Estado:**.\n' +
-      'Si hay mejoras que no son urgentes, termina con una línea que diga exactamente "SUGERENCIAS:" y debajo hasta 3 líneas que ' +
+      rulesOf(agent.instructions) +
+      '\n\nSi hay mejoras que no son urgentes, termina con una línea que diga exactamente "SUGERENCIAS:" y debajo hasta 3 líneas que ' +
       'empiecen con "- " (máximo 15 palabras cada una, sin comandos). Van a la pizarra de la oficina.' +
       personaOf(agent),
-    messages: [{ role: 'user', content: `Reporte de esta revisión:\n${data}${memoryBlock(memory)}` }],
+    messages: [
+      {
+        role: 'user',
+        content:
+          `Reporte de esta revisión:\n${data}` +
+          (trend ? `\n\n${redact(trend)}` : '') +
+          (teamView ? `\n\n${redact(teamView)}` : '') +
+          memoryBlock(memory),
+      },
+    ],
   });
 
   if (response.stop_reason === 'refusal') return null;
@@ -368,27 +450,21 @@ export async function chat(agent, question) {
   const { response, tokens } = await callWithServer(agent, {
     purpose: 'chat',
     max_tokens: 1000,
-    output_config: { effort: 'low' },
+    output_config: { effort: effortOf(agent, report?.findings) },
     system: [
       {
         type: 'text',
         text:
           `${whoIs(agent)}\n\n` +
           (agent.floor === 'negocio'
-            ? 'Conversas con el dueño del negocio. Cómo respondes:\n' +
-              '- Primero la respuesta, después el detalle si hace falta. Corto y práctico.\n' +
-              '- Aterrizado a su negocio (lo que sabes de él va abajo): ejemplos concretos, no consejos de manual.\n' +
-              '- Usa los datos de tu último trabajo; si algo no lo sabes, dilo en vez de inventarlo.\n' +
+            ? 'Conversas con el dueño del negocio (lo que sabes de él va abajo).\n\nReglas fijas:\n' +
+              '- Si algo no está en tus datos ni en lo que sabes del negocio, dilo en vez de inventarlo.\n' +
               '- No contactas a nadie ni publicas nada por tu cuenta.'
-            : 'Conversas con el dueño, un programador junior. Cómo respondes:\n' +
-              '- Primero la respuesta a lo que preguntó, en 1 a 4 frases. Más detalle solo si lo pide o si hace falta para actuar.\n' +
-              `${GROUNDING}\n` +
-              `${ACTIONS} Cada comando va en un bloque \`\`\`bash con una frase de qué hace.\n` +
-              '- Si te pregunta algo fuera de tu área, responde lo que sepas y dile que el agente de ese tema lo sabe mejor.' +
+            : 'Conversas con el dueño, un programador junior.\n\nReglas fijas:\n' +
+              `${GROUNDING}\n${OBSERVE}` +
               (memory ? `\n-${MEMORY_RULE}` : '') +
               sshRule(agent)) +
-          '\n- Español cercano y directo, sin saludos ni cierres de relleno ("¡Espero que ayude!", "¿Algo más?").' +
-          '\n- Markdown simple (negrita, listas, `código`), sin tablas ni títulos con #.' +
+          rulesOf(agent.chatInstructions, 'Cómo respondes') +
           personaOf(agent),
       },
       // El reporte va en su propio bloque con caché: varias preguntas seguidas lo reutilizan y cuestan menos.

@@ -2,7 +2,8 @@
 //   - PUESTOS (este catálogo): qué revisa cada tipo de agente. Sus revisiones están en su archivo de código;
 //     para sumar un puesto nuevo, crea su archivo y agrégalo a la lista.
 //   - AGENTES (config/agentes.json, ver agents-file.js): quién ocupa cada puesto. Nombre, aspecto, personalidad,
-//     modelo de IA, tope de tokens, qué alertas atiende y sus umbrales. Se editan en ese archivo, no en el panel.
+//     especialidad e instrucciones para la IA, modelo, tope de tokens, qué alertas atiende y sus umbrales. Se editan en
+//     ese archivo (el modelo también se puede elegir en Ajustes).
 // Los puestos de infraestructura admiten un agente activo; los de negocio, varios. Cada piso tiene 6 salas.
 // Los de infraestructura son los "agentes de monitor": solo trabajan con el botón "Agentes de monitor" encendido.
 import informatica from './informatica.js';
@@ -12,6 +13,7 @@ import coolify from './coolify.js';
 import supabase from './supabase.js';
 import instagram from './instagram.js';
 import clientes from './clientes.js';
+import coordinador from './coordinador.js';
 import { config } from '../config.js';
 import { getSetting } from '../db.js';
 import { agentApiKey, apiKeyVar } from '../agent-keys.js';
@@ -26,7 +28,7 @@ const withLooks = (p) => {
   const t = TEMPLATE.agentes[p.id] || {};
   return { ...p, name: t.nombre || p.id, role: t.puesto || p.id, description: t.descripcion || '', color: t.color || '#64748b' };
 };
-export const catalog = [informatica, ciberseguridad, logs, coolify, supabase, instagram, clientes].map(withLooks);
+export const catalog = [informatica, ciberseguridad, logs, coolify, supabase, instagram, clientes, coordinador].map(withLooks);
 export const puestoOf = (type) => catalog.find((p) => p.id === type) ?? null;
 export const ROOMS_PER_FLOOR = 6;
 export const aiModels = allModels;
@@ -62,6 +64,7 @@ setRules({ puestos: catalog.map((p) => p.id), check });
 const keyVarsOf = (keyId) =>
   Object.fromEntries(config.ai.providers.filter((p) => p.keyVar).map((p) => [p.id, apiKeyVar(keyId, p.id)]));
 const providerOf = (a, p) => resolveModel(modelOf({ id: a.id, model: a.modelo, defaultModel: p.defaultModel })).provider.id;
+const rulesOf = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((l) => l.trim()).filter(Boolean);
 const ownKeysOf = (keyId) => config.ai.providers.filter((p) => p.keyVar && agentApiKey(keyId, p.id)).map((p) => p.id);
 
 // Cada agente del archivo con su puesto encima: lo que hace (run, reglas) viene del puesto; cómo se llama, cómo se
@@ -90,10 +93,15 @@ export function allAgents() {
         hair: a.pelo || null,
         skin: a.piel || null,
         persona: a.personalidad || '',
+        // Lo que sabe de su oficio y cómo trabaja: van en sus instrucciones para la IA (ver ai.js).
+        expertise: a.especialidad || '',
+        instructions: rulesOf(a.instrucciones),
+        chatInstructions: rulesOf(a.instruccionesChat),
         context: a.contexto || '',
         guide: a.guide || '',
         model: a.modelo || '',
         dailyTokens: a.tokensDiarios || 0,
+        effort: a.esfuerzo || 'auto',
         alerts: a.alertas,
         watch: a.vigila,
         telegram: a.telegram,

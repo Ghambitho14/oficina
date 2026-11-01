@@ -14,6 +14,7 @@ export const KINDS = {
   acceso: { icon: '🔑', label: 'Accesos' },
   manual: { icon: '👆', label: 'Pedidos manuales' },
   alerta: { icon: '🚨', label: 'Alertas del monitor' },
+  claude: { icon: '🤖', label: 'Encargos a Claude' },
 };
 const SYSTEM = { id: 'sistema', name: 'Sistema', color: '#64748b' };
 

@@ -222,7 +222,20 @@ export const config = {
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     chatId: process.env.TELEGRAM_CHAT_ID || '',
+    // Tu id de Telegram: el coordinador te habla por tu chat privado con el bot y solo te obedece a ti. Vacío = apagado.
+    ownerId: (process.env.TELEGRAM_OWNER_ID || '').trim(),
+    // Segundos que cada pedido a getUpdates espera mensajes nuevos.
+    pollSec: num(process.env.TELEGRAM_POLL_SEC, 50),
     // Solo para las pruebas (un Telegram falso en esta máquina).
     api: trimUrl(process.env.TELEGRAM_API) || 'https://api.telegram.org',
+  },
+
+  // Encargos a Claude Code: la carpeta compartida con el puente (puente/claude-puente.js), que corre fuera del
+  // contenedor. Vacío = el coordinador no puede pasarle nada a Claude.
+  encargos: {
+    dir: process.env.ENCARGOS_DIR || '',
+    // Minutos que puede tardar Claude en un encargo antes de darlo por perdido.
+    timeoutMin: num(process.env.CLAUDE_TIMEOUT_MIN, 20),
+    pollSec: num(process.env.ENCARGOS_POLL_SEC, 10),
   },
 };

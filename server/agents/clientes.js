@@ -1,7 +1,7 @@
 // Buscador de clientes: busca en la web negocios que podrían necesitar los servicios del negocio (ORG_NAME / "Sobre tu negocio").
 // Solo negocios y datos de contacto públicos del negocio. No contacta a nadie: tú decides qué hacer con la lista.
 import { config } from '../config.js';
-import { callAi, textOf, AiUnavailable, aboutBusiness, personaOf } from '../ai.js';
+import { callAi, textOf, AiUnavailable, aboutBusiness, effortOf, personaOf, whoIs, rulesOf } from '../ai.js';
 import { addLeads, knownLeadNames, listLeads } from '../db.js';
 
 const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -41,8 +41,6 @@ const SAVE_TOOL = {
 
 export default {
   id: 'clientes',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: encontrar negocios que podrían ser clientes y explicar por qué con evidencia: sin página web, con una web vieja, lenta o que no funciona en el celular, sin reservas ni venta en línea, o con mala presencia en Google. Solo usas datos públicos del negocio.',
   floor: 'negocio',
   schedule: 'manual',
   dailyLimit: config.ai.leadsPerDay,
@@ -93,20 +91,16 @@ export default {
           agent: ctx.agent,
           purpose: 'clientes',
           max_tokens: 8000,
-          output_config: { effort: 'low' },
+          output_config: { effort: effortOf(ctx.agent) },
           system:
-            `Eres ${ctx.agent.name}, a cargo de buscar clientes${config.brand.org ? ` para ${config.brand.org}` : ''}. ${ctx.agent.expertise}\n\n` +
-            'Cómo buscas:\n' +
-            '- Usa la búsqueda web para encontrar negocios REALES que sigan funcionando. Busca en directorios, Google Maps, ' +
-            'redes y webs del rubro; varía las búsquedas en vez de repetir la misma.\n' +
+            `${whoIs(ctx.agent)}\n\n` +
+            'Reglas fijas:\n' +
+            '- Usa la búsqueda web para encontrar negocios REALES que sigan funcionando. Si no viste el negocio en una fuente, no va.\n' +
             '- Solo negocios, nunca personas particulares. Del contacto, solo el teléfono o email comercial que el propio ' +
             'negocio publica: nada de perfiles personales, datos privados ni direcciones de casas.\n' +
-            '- Verifica antes de incluir: si no viste el negocio en una fuente, no va. Si no encontraste su web, "web" queda vacía ' +
-            'y eso mismo puede ser el motivo. Nunca adivines una URL ni un teléfono.\n' +
-            '- Prefiere a los que más claramente necesitan lo que ofrecemos. Mejor 4 prospectos buenos que 10 dudosos.\n' +
-            '- "motivo": una frase con la evidencia que viste y qué le ofrecerías ("Su web no carga en el celular y reservan solo ' +
-            'por teléfono: una web con reservas"), nunca "podría mejorar su presencia digital".\n' +
-            '- Al terminar, llama una sola vez a guardar_prospectos; en "resumen" di qué buscaste y qué tan bueno fue el resultado.' +
+            '- Nunca adivines una URL ni un teléfono: si no encontraste su web, "web" queda vacía (y eso mismo puede ser el motivo).\n' +
+            '- Al terminar, llama una sola vez a guardar_prospectos.' +
+            rulesOf(ctx.agent.instructions, 'Cómo buscas') +
             personaOf(ctx.agent),
           tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: config.ai.leadsSearches }, SAVE_TOOL],
           messages,

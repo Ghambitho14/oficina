@@ -3,7 +3,7 @@ import { activeAgents, monitorAgentsOn } from './agents/index.js';
 import { collectHost } from './collectors/host.js';
 import { collectDocker } from './collectors/docker.js';
 import { collectWeb } from './collectors/web.js';
-import { saveReport, latestReport, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardKey } from './db.js';
+import { saveReport, latestReport, recentReports, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardKey } from './db.js';
 import { diagnose, parseSuggestions, modelOf, aiEnabledFor } from './ai.js';
 import { sendReport, telegramEnabled, ICON } from './notify/telegram.js';
 import { watchedPages } from './agents-file.js';
@@ -15,6 +15,7 @@ const RANK = { info: 0, ok: 0, warn: 1, crit: 2 };
 const statusOf = (findings) =>
   findings.reduce((s, f) => (RANK[f.severity] > RANK[s] ? f.severity : s), 'ok');
 const STATUS_TEXT = { ok: 'Todo bien', warn: 'Atención', crit: 'Problema' };
+const TREND_RUNS = 6; // revisiones anteriores que ve la IA al diagnosticar
 
 // Gravedad de una alerta del monitor para Telegram: las de "volvió a funcionar" van en verde.
 const RECOVERY = /(_up|_ok|_healthy|_unpaused)$/;
@@ -179,7 +180,12 @@ export async function runAgent(agent, ctx, input) {
     } else if (goodNews) {
       // Una recuperación: se avisa sin diagnóstico.
     } else {
-      const answer = await diagnose(agent, report, [notes, memory.text].filter(Boolean).join('\n\n')).catch((err) => {
+      // Para que piense con contexto: cómo venían sus revisiones y qué ven ahora sus compañeros de infraestructura.
+      const past = recentReports(agent.id, TREND_RUNS);
+      const team = activeAgents()
+        .filter((a) => a.id !== agent.id && a.floor !== 'negocio' && a.schedule !== 'manual' && a.type !== 'coordinador')
+        .map((a) => ({ agent: a, report: latestReport(a.id) }));
+      const answer = await diagnose(agent, report, [notes, memory.text].filter(Boolean).join('\n\n'), { past, team }).catch((err) => {
         console.error(`[ia] ${agent.id}:`, err.message);
         return null;
       });

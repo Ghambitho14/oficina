@@ -12,6 +12,9 @@ import { providerList, refreshModels, resolveModel, allModels } from './provider
 import { telegramEnabled, sendTest } from './notify/telegram.js';
 import { startMonitorFeed, monitorStatus, monitorAgentsState, setMonitorAgents } from './monitor-feed.js';
 import { initVault, journal, vaultEnabled } from './vault.js';
+import { coordinar, isCoordinator } from './coordinador.js';
+import { startInbox } from './telegram-inbox.js';
+import { startEncargos } from './encargos.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -255,6 +258,9 @@ app.get('/api/settings/agents', async (_req, res) => {
       hair: a.hair,
       skin: a.skin,
       persona: a.persona,
+      expertise: a.expertise,
+      instructions: a.instructions,
+      chatInstructions: a.chatInstructions,
       context: a.context,
       model: a.model,
       dailyTokens: a.dailyTokens,
@@ -386,7 +392,7 @@ app.post('/api/chat/:agent', async (req, res) => {
 
   chatting.add(agent.id);
   try {
-    const answer = await chat(agent, message);
+    const answer = isCoordinator(agent) ? await coordinar(agent, message) : await chat(agent, message);
     addChatMessage(agent.id, 'user', message);
     addChatMessage(agent.id, 'assistant', answer.text, answer.tokens);
     logActivity(agent.id, 'chat', `Respondí una pregunta: «${message.length > 80 ? `${message.slice(0, 80)}…` : message}»`, { tokens: answer.tokens });
@@ -446,6 +452,8 @@ const server = app.listen(config.port, () => {
   refreshModels().catch(() => {});
   startScheduler();
   startMonitorFeed();
+  startInbox();
+  startEncargos();
   if (vaultEnabled()) {
     // Obsidian: la nota central muestra las áreas de infraestructura y la bitácora sigue el registro de actividad.
     initVault({

@@ -3,7 +3,7 @@ import { api, timeAgo } from '../api.js';
 import { BarChart } from './Chart.jsx';
 import { fmtNum, fmtUsd, severityColor } from '../ui.jsx';
 
-const PURPOSES = { diagnostico: 'Diagnósticos', chat: 'Chat', ideas: 'Ideas de Instagram', clientes: 'Búsqueda de clientes' };
+const PURPOSES = { diagnostico: 'Diagnósticos', chat: 'Chat', ideas: 'Ideas de Instagram', clientes: 'Búsqueda de clientes', coordinar: 'Coordinar' };
 
 function Tile({ label, period }) {
   return (

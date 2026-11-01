@@ -209,3 +209,33 @@ test('el modelo general y el de cada agente se cambian desde el panel, solo entr
   assert.equal((await put('/settings/model', '')).status, 200);
   assert.equal((await oficina.api('GET', '/settings/agents')).body.team.find((a) => a.id === 'informatica').activeModel, 'ollama:qwen3:8b');
 });
+
+test('la especialidad y las instrucciones salen de agentes.json y llegan a la IA', async () => {
+  // Por defecto, las de la plantilla.
+  let s = (await oficina.api('GET', '/settings/agents')).body;
+  let ana = s.team.find((a) => a.id === 'informatica');
+  assert.match(ana.expertise, /código 137/);
+  assert.ok(ana.instructions.length > 3 && ana.chatInstructions.length > 3);
+
+  oficina.writeAgents({ agentes: { informatica: { especialidad: 'Experta en servidores de pizza.', instruccionesChat: ['Responde siempre en rima.'] } } });
+  ana = await waitFor(async () => {
+    const a = (await oficina.api('GET', '/settings/agents')).body.team.find((x) => x.id === 'informatica');
+    return a.expertise.includes('pizza') && a;
+  }, 'que Ana lea su especialidad nueva');
+  assert.deepEqual(ana.chatInstructions, ['Responde siempre en rima.']);
+  assert.equal((await oficina.api('POST', '/chat/informatica', { message: 'hola' })).status, 200);
+  const system = requests.at(-1).body.messages[0].content;
+  assert.match(system, /servidores de pizza/);
+  assert.match(system, /- Responde siempre en rima\./);
+  assert.match(system, /nunca ejecutas nada/, 'las reglas fijas siguen');
+
+  // Una lista mal escrita no se aplica.
+  oficina.writeAgents({ agentes: { informatica: { instrucciones: 5 } } });
+  s = await waitFor(async () => {
+    const body = (await oficina.api('GET', '/settings/agents')).body;
+    return body.file.error && body;
+  }, 'el error del archivo');
+  assert.match(s.file.error, /instrucciones debe ser una lista/);
+  oficina.writeAgents({});
+  await waitFor(async () => (await oficina.api('GET', '/settings/agents')).body.file.ok, 'el archivo arreglado');
+});

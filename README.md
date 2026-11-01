@@ -27,8 +27,8 @@ comando correr y lo corres tú.
 |---|---|
 | **Vigila** | CPU, RAM, disco, contenedores, intentos de acceso SSH, puertos abiertos, certificados, logs de cada app, backups de Coolify y Supabase. |
 | **Diagnostica** | Las reglas fijas detectan el problema y la IA lo explica en español, con acciones concretas. Sin IA sigue funcionando, solo que sin diagnóstico ni chat. |
-| **Conversa** | Puedes preguntarle a cualquier agente sobre lo que vio: «¿qué arreglo primero?». |
-| **Recuerda** | Guarda todo en un registro de actividad y, si quieres, en tu bóveda de Obsidian. Lee esa memoria antes de diagnosticar, y también lo que le dejes escrito. |
+| **Conversa** | Puedes preguntarle a cualquier agente sobre lo que vio: «¿qué arreglo primero?». Y ahora también tienes un coordinador por Telegram. |
+| **Coordina** | Marco te habla por tu chat privado, le pregunta al equipo, pide revisiones y propone pasar lo difícil a Claude Code —solo si tú apruebas. |
 | **Cuida el gasto** | Solo llama a la IA cuando los hallazgos cambian, con tope diario de tokens. También funciona con modelos locales. |
 | **Ayuda al negocio** | En el segundo piso, un agente propone ideas para Instagram y otro busca clientes potenciales. Solo trabajan cuando se lo pides y no publican ni contactan a nadie. |
 
@@ -41,10 +41,11 @@ comando correr y lo corres tú.
 | **Sofía** | Logs | Errores, excepciones y respuestas 5xx de cada app |
 | **Tomás** | Coolify y backups | Apps, servicios y antigüedad de los respaldos |
 | **Valeria** | Supabase | Auth, API REST y que Studio no esté abierto |
+| **Marco** | Coordinación | Te habla por Telegram, le pregunta al equipo, pide revisiones y propone pasar lo difícil a Claude Code |
 | **Camila** | Contenido | Ideas de publicaciones, listas para copiar |
 | **Diego** | Clientes | Negocios reales de un rubro y zona, en una lista exportable |
 
-Nombres, personalidad, umbrales y modelo se cambian en un solo archivo, `config/agentes.json`, sin reiniciar.
+Nombres, personalidad, especialidad, instrucciones para la IA, umbrales y modelo se cambian en un solo archivo, `config/agentes.json`, sin reiniciar.
 
 ## Se conecta con Container Monitor
 
@@ -112,6 +113,8 @@ la [guía completa](docs/guia.md).
 - Contraseña con bcrypt, cookie `httpOnly` y `SameSite=Strict`, y límite de intentos de acceso.
 - Antes de enviar datos a la IA se ocultan IPs, emails, JWT y tokens.
 - El chat no tiene herramientas: la IA solo responde texto y no puede ejecutar nada.
+- El coordinador de Telegram nunca ejecuta nada; los encargos a Claude Code solo avanzan si tú tocas los botones.
+- Claude Code corre fuera del contenedor, con sus propios permisos, y solo el `TELEGRAM_OWNER_ID` puede hablar con el coordinador.
 
 ## Stack
 

@@ -105,8 +105,6 @@ function hostChecks(ctx) {
 
 export default {
   id: 'ciberseguridad',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: la seguridad del servidor. SSH (fuerza bruta, logins con contraseña o como root), puertos expuestos, certificados SSL, cabeceras HTTP, actualizaciones pendientes y alertas de Snort. Separas el ruido de Internet (bots y escaneos que golpean a todos los servidores) de lo que importa de verdad: un login exitoso raro, un puerto de base de datos abierto, una IP que insiste contra una app. Antes de recomendar bloquear una IP, miras si es de un servicio legítimo (Cloudflare, Google, el propio monitor). Comandos que conoces: sudo ss -tlnp, sudo ufw status verbose, sudo fail2ban-client status sshd, sudo grep Accepted /var/log/auth.log | tail, apt list --upgradable.',
   floor: 'infra',
   schedule: 'auto',
   daily: true, // Snort cuenta lo de hoy: revisa solo al empezar el día (ver scheduler.js)

@@ -4,8 +4,6 @@ import { eventFinding } from '../collectors/monitor.js';
 
 export default {
   id: 'informatica',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: la salud del servidor (CPU, RAM, swap, disco), los contenedores Docker y que las páginas respondan. Comparas la carga con los núcleos, distingues un pico de un problema sostenido, reconoces un contenedor en bucle de reinicios o muerto por memoria (código 137 = sin memoria) y sabes qué llena el disco en Docker (imágenes viejas, volúmenes, logs, caché de builds). Comandos que conoces: docker stats --no-stream, docker ps -a, docker logs --tail 100 <contenedor>, docker system df, df -h, free -h.',
   floor: 'infra',
   schedule: 'auto',
 

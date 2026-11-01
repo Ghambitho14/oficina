@@ -50,9 +50,12 @@ HomaLab/
 │   ├── scheduler.js        Corre a los agentes, guarda reportes, llama a la IA, avisa
 │   ├── monitor-feed.js     Escucha las alertas del monitor y las reparte a los agentes
 │   ├── vault.js            Obsidian: escribe las notas y arma la "memoria" de los agentes
-│   ├── ai.js               ÚNICO lugar que habla con la IA (proveedor, key, modelo y topes por agente; diagnóstico y chat)
+│   ├── ai.js               ÚNICO lugar que habla con la IA (proveedor, key, modelo y topes por agente; diagnóstico, chat y coordinador)
 │   ├── providers.js        Proveedores de IA (Claude, Ollama, OpenCode, compatibles con OpenAI): modelos y traducción
 │   ├── agent-keys.js       Nombre de la variable de key propia de cada agente (AGENT_<ID>[_<PROVEEDOR>]_API_KEY)
+│   ├── coordinador.js      El "jefe": responde por Telegram/chat, pregunta al equipo, pide revisiones, propone a Claude
+│   ├── encargos.js         Ciclo de vida de los encargos a Claude Code (propuesto → investigando → ejecutando → hecho)
+│   ├── telegram-inbox.js   Long polling de Telegram: solo mensajes privados del dueño y sus botones
 │   │
 │   ├── agents/             Los agentes: qué revisa cada uno y qué considera un problema
 │   │   ├── index.js        Puestos (catálogo) + el equipo: quién ocupa cada puesto, reglas, cambios
@@ -62,7 +65,8 @@ HomaLab/
 │   │   ├── coolify.js      Tomás — Coolify, sus apps y los backups
 │   │   ├── supabase.js     Valeria — Supabase self-hosted
 │   │   ├── instagram.js    Camila — ideas para Instagram (bajo pedido)
-│   │   └── clientes.js     Diego — busca posibles clientes (bajo pedido)
+│   │   ├── clientes.js     Diego — busca posibles clientes (bajo pedido)
+│   │   └── coordinador.js  Marco — puesto del jefe de equipo
 │   │
 │   ├── collectors/         Funciones que solo LEEN datos (nunca cambian nada)
 │   │   ├── host.js         /proc del host: CPU, RAM, disco, procesos
@@ -80,6 +84,11 @@ HomaLab/
 │   │   └── helpers.js      Monitor simulado y Oficina temporal (base y bóveda propias, sin IA real)
 │   ├── notify/telegram.js  Avisos por Telegram (opcional)
 │   └── scripts/hash-password.js  Genera el hash de la contraseña del panel
+│
+├── puente/                 ── Puente a Claude Code (corre fuera del contenedor) ──
+│   ├── claude-puente.js    Toma encargos de ENCARGOS_DIR y corre claude -p / --resume
+│   ├── claude-puente.service  Plantilla de servicio systemd --user
+│   └── plantillas/         CLAUDE.md y settings.json de ejemplo para CLAUDE_WORKDIR
 │
 └── web/                    ── FRONTEND (React 19 + Vite, three.js para el 3D) ──
     ├── index.html
@@ -161,7 +170,7 @@ Todo uso queda en la tabla `ai_usage` y respeta `AI_DAILY_TOKENS`.
 | | Dónde vive | Quién lo cambia |
 |---|---|---|
 | **Puesto** (qué revisa, sus reglas, su rol y descripción) | Un archivo en `server/agents/` (el catálogo) | Quien programa un puesto; en el panel solo se **elige** |
-| **Persona** (activo, nombre, color, pelo/piel, personalidad, modelo y tope de IA) | Tabla `settings`, clave `team` | Cada usuario en **Ajustes › Agentes** |
+| **Persona** (activo, nombre, color, pelo/piel, personalidad, especialidad, instrucciones para la IA, modelo y tope de IA) | `config/agentes.json` (el modelo también se elige en **Ajustes**) | Quien administra la Oficina |
 | **API key propia** | `.env`: `AGENT_<ID>[_<PROVEEDOR>]_API_KEY` (`server/agent-keys.js`) | Quien administra el servidor |
 
 - `agents/index.js`: `catalog` (los puestos), `allAgents()` (cada agente con su puesto encima), `activeAgents()`,
@@ -177,6 +186,9 @@ Todo uso queda en la tabla `ai_usage` y respeta `AI_DAILY_TOKENS`.
   y el del agente. Los proveedores compatibles con OpenAI devuelven respuestas con la forma de Claude
   (`server/providers.js`), así los agentes no distinguen de dónde vienen. La búsqueda web solo existe con Claude.
 - La **personalidad** solo cambia cómo habla con la IA; nunca sus reglas.
+- Sus instrucciones para la IA también viven en agentes.json: `especialidad` (lo que sabe), `instrucciones` (cómo hace su
+  trabajo: diagnóstico, ideas o búsqueda) e `instruccionesChat`. En el código (`ai.js`) quedan solo las reglas fijas:
+  no inventar, no ejecutar nada y el formato que la Oficina lee (SUGERENCIAS, campos de las ideas y los prospectos).
 - La primera vez se migra la clave vieja `agents` (nombre, color, aspecto, personalidad; el rol y la descripción
   escritos a mano se descartan porque ahora vienen del puesto).
 
@@ -216,8 +228,9 @@ recuerda: historial de esos hallazgos y recursos, tus notas, y las de `OBSIDIAN_
 | `activity` | Todo lo que hacen los agentes (la pestaña Actividad y la bitácora de Obsidian) |
 | `samples` · `site_checks` | Muestras para las gráficas de Salud y el uptime de las páginas |
 | `ai_usage` | Cada llamada a la IA: tokens y costo estimado |
-| `chat_messages` | Conversaciones con los agentes |
-| `settings` | Ajustes guardados: `team` (el equipo: puesto y persona de cada agente), `brief` (sobre tu negocio), `monitor.cursor` |
+| `chat_messages` | Conversaciones con los agentes (también la del coordinador) |
+| `settings` | Ajustes guardados: `team` (el equipo: puesto y persona de cada agente), `brief` (sobre tu negocio), `monitor.cursor`, `telegramOffset` |
+| `encargos` | Encargos a Claude Code: estados, resultados, costos y sesiones |
 | `leads` | Prospectos que encontró el buscador de clientes |
 
 Se limpia sola: actividad, muestras y chequeos de páginas más viejos que `KEEP_DAYS`; el uso de IA a los 90 días;
@@ -281,7 +294,10 @@ Todas piden sesión salvo las marcadas con 🌐.
 |---|---|
 | Cambiar qué considera un problema un agente | `server/agents/<agente>.js` |
 | Leer un dato nuevo del servidor | Un collector nuevo en `server/collectors/` y usarlo desde el agente |
-| Cambiar cómo habla o qué pide la IA | `server/ai.js` (diagnóstico y chat) |
+| Cambiar cómo habla o qué pide la IA | `server/ai.js` (diagnóstico, chat y coordinador) |
+| Cambiar al coordinador (Marco) | `config/agentes.json` (nombre, personalidad, instrucciones) |
+| Cambiar el flujo de encargos a Claude | `server/encargos.js` |
+| Cambiar el puente que corre Claude Code | `puente/claude-puente.js` |
 | Repartir distinto las alertas del monitor | `ALERT_ROUTES` en el `.env` (sin código) |
 | Cambiar la forma de las notas de Obsidian | `server/vault.js` |
 | Una sección nueva del panel | Un archivo en `web/src/panel/` + agregarlo a `SECTIONS` en `Office.jsx` y su ícono en `SideNav.jsx` |

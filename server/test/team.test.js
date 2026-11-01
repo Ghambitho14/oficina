@@ -87,12 +87,13 @@ test('un solo agente activo por puesto de infraestructura y 6 por piso', () => {
   assert.equal(status().ok, true);
   assert.equal(byId('ana-2').enabled, true);
 
-  const many = Object.fromEntries([1, 2, 3, 4, 5].map((i) => [`contenido-${i}`, { tipo: 'instagram', nombre: `Contenido ${i}` }]));
+  // Coordinador también ocupa una sala del piso de negocio.
+  const many = Object.fromEntries([1, 2, 3, 4].map((i) => [`contenido-${i}`, { tipo: 'instagram', nombre: `Contenido ${i}` }]));
   write({ agentes: many });
   assert.match(status().error, /Negocio tiene 6 salas/);
   write({ agentes: { ...many, clientes: { activo: false } } });
   assert.equal(status().ok, true);
-  assert.equal(team.idsForPuesto('instagram').length, 6);
+  assert.equal(team.idsForPuesto('instagram').length, 5);
   write({ agentes: { 'contenido-1': { tipo: 'instagram' } } });
   assert.match(status().error, /ponle un "nombre" propio/);
 });

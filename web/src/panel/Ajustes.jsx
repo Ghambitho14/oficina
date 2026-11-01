@@ -30,6 +30,8 @@ const EXAMPLE = `{
     "informatica": {
       "nombre": "Ana",
       "personalidad": "Directa y sin tecnicismos.",
+      "especialidad": "Tu especialidad: la salud del servidor y Docker.",
+      "instruccionesChat": ["Responde en 2 frases.", "Sin relleno."],
       "vigila": { "cpu": 80 },
       "telegram": { "minimo": "warn" }
     }
@@ -145,6 +147,31 @@ function AgentModel({ agent, providers, onSaved }) {
   );
 }
 
+// Las reglas que sigue con la IA ("instrucciones" e "instruccionesChat" de agentes.json), plegadas para no llenar la tarjeta.
+function Rules({ label, rules = [], fileKey }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>
+        {rules.length ? (
+          <details>
+            <summary className="small">
+              {rules.length} regla{rules.length === 1 ? '' : 's'} (<code>{fileKey}</code>)
+            </summary>
+            <ul className="watch-list">
+              {rules.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          </details>
+        ) : (
+          <span className="muted">Sin reglas propias</span>
+        )}
+      </dd>
+    </>
+  );
+}
+
 function AgentCard({ agent, providers, onSaved }) {
   const watch = Object.entries(agent.watch || {});
   return (
@@ -168,6 +195,14 @@ function AgentCard({ agent, providers, onSaved }) {
         <dd>{agent.description}</dd>
         <dt>Personalidad</dt>
         <dd>{agent.persona || <span className="muted">Sin personalidad propia</span>}</dd>
+        <dt>Especialidad</dt>
+        <dd>{agent.expertise || <span className="muted">Sin especialidad</span>}</dd>
+        {[
+          ['Cómo trabaja', agent.instructions, 'instrucciones'],
+          ['En el chat', agent.chatInstructions, 'instruccionesChat'],
+        ].map(([label, rules, key]) => (
+          <Rules key={key} label={label} rules={rules} fileKey={key} />
+        ))}
         {agent.context && (
           <>
             <dt>Lo que sabe</dt>

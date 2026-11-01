@@ -52,8 +52,14 @@ export function baseOf() {
 }
 
 // ---------- Validación ----------
-const KEYS = ['tipo', 'activo', 'nombre', 'puesto', 'descripcion', 'personalidad', 'contexto', 'guia', 'color', 'pelo', 'piel', 'modelo', 'tokensDiarios', 'alertas', 'vigila', 'telegram'];
-const TEXT = { nombre: 30, puesto: 40, descripcion: 300, personalidad: 1000, contexto: 2000, guia: 200, modelo: 120 };
+const KEYS = ['tipo', 'activo', 'nombre', 'puesto', 'descripcion', 'personalidad', 'especialidad', 'instrucciones', 'instruccionesChat', 'contexto', 'guia', 'color', 'pelo', 'piel', 'modelo', 'tokensDiarios', 'esfuerzo', 'alertas', 'vigila', 'telegram'];
+const TEXT = { nombre: 30, puesto: 40, descripcion: 300, personalidad: 1000, especialidad: 2000, contexto: 2000, guia: 200, modelo: 120 };
+// Las instrucciones para la IA: una lista de reglas (o un solo texto).
+const RULES = ['instrucciones', 'instruccionesChat'];
+const badRules = (v) =>
+  typeof v === 'string' ? v.length > 4000 : !Array.isArray(v) || v.length > 30 || v.some((l) => typeof l !== 'string' || l.length > 600);
+// Cuánto piensa la IA (ver effortOf en ai.js).
+const EFFORTS = ['auto', 'low', 'medium', 'high'];
 const GUIDE_MAX = 6000; // los modelos locales tienen poco contexto
 
 // La guía de un agente (su "guia" en el archivo): un .md junto a agentes.json. null si la ruta sale de esa carpeta.
@@ -77,10 +83,14 @@ function checkAgent(id, a, puestos) {
     if (a[k].length > max) return `${at}.${k} admite máximo ${max} caracteres`;
   }
   if (a.nombre !== undefined && !a.nombre.trim()) return `${at}.nombre no puede quedar vacío`;
+  for (const k of RULES)
+    if (a[k] !== undefined && badRules(a[k]))
+      return `${at}.${k} debe ser una lista de reglas entre comillas, p. ej. ["Primero la respuesta", "Sin relleno"] (máximo 30, de 600 caracteres cada una)`;
   if (a.guia && !guidePath(a.guia)) return `${at}.guia debe ser un archivo dentro de la carpeta de agentes.json, p. ej. "guias/marca.md"`;
   for (const k of ['color', 'pelo', 'piel']) if (a[k] && !HEX.test(a[k])) return `${at}.${k} debe ser un color como #3b82f6`;
   if (a.tokensDiarios !== undefined && a.tokensDiarios !== 0 && (!Number.isInteger(a.tokensDiarios) || a.tokensDiarios < 1000))
     return `${at}.tokensDiarios debe ser 0 (sin tope propio) o un entero de al menos 1000`;
+  if (a.esfuerzo !== undefined && !EFFORTS.includes(a.esfuerzo)) return `${at}.esfuerzo debe ser "auto", "low", "medium" o "high"`;
   if (a.alertas !== undefined && (!Array.isArray(a.alertas) || a.alertas.some((k) => typeof k !== 'string' || !k.trim())))
     return `${at}.alertas debe ser una lista de tipos de alerta, p. ej. ["container_*", "snort"]`;
   if (a.vigila !== undefined) {

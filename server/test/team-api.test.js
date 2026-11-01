@@ -47,7 +47,7 @@ let lastLoad = null;
 test('catálogo de puestos, sin vacantes, sin archivo propio y con los modelos conocidos', async () => {
   const s = await settings();
   lastLoad = s.file.loadedAt;
-  assert.equal(s.puestos.length, 7);
+  assert.equal(s.puestos.length, 8);
   assert.equal(s.vacantes.length, 0);
   assert.deepEqual(s.models, ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
   assert.equal(s.generalKey, false);

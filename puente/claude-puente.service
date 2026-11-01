@@ -1,0 +1,27 @@
+[Unit]
+Description=Puente de encargos de la Oficina a Claude Code
+After=network-online.target
+
+[Service]
+Type=simple
+# Ajusta las rutas si el repo no está en ~/HomaLab.
+ExecStart=%h/.local/bin/node %h/HomaLab/puente/claude-puente.js
+WorkingDirectory=%h/oficina-claude
+Restart=on-failure
+RestartSec=10
+
+# Un servicio de usuario no trae tu PATH: aquí deben estar node y claude.
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# La misma carpeta que el docker-compose monta en /encargos (ENCARGOS_HOST_DIR, por defecto ./encargos del repo).
+Environment="ENCARGOS_DIR=%h/HomaLab/encargos"
+# Carpeta de trabajo de Claude (tiene el CLAUDE.md y .claude/settings.json).
+Environment="CLAUDE_WORKDIR=%h/oficina-claude"
+# Tiempo límite por encargo en minutos (el mismo CLAUDE_TIMEOUT_MIN de la Oficina).
+Environment="CLAUDE_TIMEOUT_MIN=20"
+# Máximo de turnos de Claude por fase.
+Environment="CLAUDE_MAX_TURNS=25"
+# Cada cuántos segundos revisa si hay encargos nuevos.
+Environment="CLAUDE_PUENTE_POLL_SEC=5"
+
+[Install]
+WantedBy=default.target

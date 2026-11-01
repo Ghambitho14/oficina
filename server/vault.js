@@ -322,7 +322,7 @@ export function recordRun(agent, { report, previous, events = [] }) {
 }
 
 // Bitácora del día: una línea por cosa importante que hicieron los agentes.
-const JOURNAL_KINDS = new Set(['hallazgo', 'alerta', 'error', 'manual', 'telegram']);
+const JOURNAL_KINDS = new Set(['hallazgo', 'alerta', 'error', 'manual', 'telegram', 'claude']);
 export function journal({ agent, kind, message }) {
   if (!vaultEnabled() || !JOURNAL_KINDS.has(kind)) return;
   try {

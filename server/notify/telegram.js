@@ -83,30 +83,58 @@ const fileName = (agent, at) => {
   return `${slug(agent.name) || 'agente'}-${date.split('-').reverse().join('-')}-${time.replace(':', '')}.md`;
 };
 
-// Devuelve { ok, error }. El error nunca incluye el token.
+// Devuelve { ok, result, status, error }. El error nunca incluye el token.
 async function call(method, init) {
   try {
     const res = await fetch(`${config.telegram.api}/bot${config.telegram.token}/${method}`, { method: 'POST', signal: AbortSignal.timeout(15_000), ...init });
-    if (res.ok) return { ok: true };
     const body = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, result: body.result };
     const error = `Telegram respondió ${res.status}${body.description ? `: ${body.description}` : ''}`;
     console.error('[telegram]', error);
-    return { ok: false, error };
+    return { ok: false, status: res.status, error };
   } catch (err) {
     console.error('[telegram]', err.message);
     return { ok: false, error: `No pude llegar a Telegram: ${err.message}` };
   }
 }
 
-const send = (text) =>
-  call('sendMessage', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chat_id: config.telegram.chatId, text }) });
+// Cualquier método de la API con un cuerpo JSON. `timeoutMs` para los que esperan (getUpdates).
+export const telegramApi = (method, payload, timeoutMs) =>
+  call(method, {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    ...(timeoutMs && { signal: AbortSignal.timeout(timeoutMs) }),
+  });
 
-function sendDocument(caption, name, content) {
+// Botones bajo un mensaje: filas de { text, data }. Al tocarlos llega un callback_query con ese data.
+const keyboard = (buttons) => buttons && { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) };
+
+const sendTo = (chatId, text, buttons) =>
+  telegramApi('sendMessage', { chat_id: chatId, text, ...(buttons && { reply_markup: keyboard(buttons) }) });
+const send = (text) => sendTo(config.telegram.chatId, text);
+
+function sendDocument(caption, name, content, chatId = config.telegram.chatId, buttons) {
   const form = new FormData();
-  form.set('chat_id', config.telegram.chatId);
+  form.set('chat_id', chatId);
   form.set('caption', caption);
   form.set('document', new Blob([content], { type: 'text/markdown' }), name);
+  if (buttons) form.set('reply_markup', JSON.stringify(keyboard(buttons)));
   return call('sendDocument', { body: form });
+}
+
+// ---------- El chat privado del dueño (el coordinador) ----------
+// Los reportes de los agentes van al grupo (TELEGRAM_CHAT_ID); lo que habla el coordinador, al chat privado del
+// dueño (TELEGRAM_OWNER_ID: en un chat privado, el id del chat es el de la persona).
+export const ownerEnabled = () => Boolean(config.telegram.token && config.telegram.ownerId);
+
+// Un texto largo va como .md con un aviso breve (y los botones, si hay); uno corto, como mensaje.
+export async function sendOwner(text, buttons, { title = 'Mensaje', fileName = 'mensaje.md' } = {}) {
+  if (!ownerEnabled()) return { ok: false, error: 'Falta TELEGRAM_OWNER_ID en el .env' };
+  const short = plain(text);
+  if (short.length <= 3500) return sendTo(config.telegram.ownerId, short, buttons);
+  const caption = `${title}\n\n${short.slice(0, 700)}…\n\n(Completo en el archivo)`.slice(0, 1024);
+  const sent = await sendDocument(caption, fileName, text, config.telegram.ownerId, buttons);
+  return sent.ok ? sent : sendTo(config.telegram.ownerId, `${short.slice(0, 3900)}…`, buttons);
 }
 
 // Devuelve true si se envió (false si Telegram está apagado o el agente no quiere avisar esto).

@@ -57,11 +57,18 @@ services:
       - LEADS_PER_DAY=${LEADS_PER_DAY:-5}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # Tu id de Telegram (chat privado). El coordinador te habla ahí y solo te obedece a ti. Vacío = apagado.
+      - TELEGRAM_OWNER_ID=${TELEGRAM_OWNER_ID:-}
+      - TELEGRAM_POLL_SEC=${TELEGRAM_POLL_SEC:-50}
       - COOLIFY_URL=${COOLIFY_URL:-}
       - COOLIFY_TOKEN=${COOLIFY_TOKEN:-}
       - BACKUP_MAX_HOURS=${BACKUP_MAX_HOURS:-}
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      # Encargos a Claude Code: carpeta compartida con el puente (fuera del contenedor). Vacío = apagado.
+      - ENCARGOS_DIR=${ENCARGOS_DIR:-}
+      - CLAUDE_TIMEOUT_MIN=${CLAUDE_TIMEOUT_MIN:-20}
+      - ENCARGOS_POLL_SEC=${ENCARGOS_POLL_SEC:-10}
       - LOG_ERRORS_WARN=${LOG_ERRORS_WARN:-}
       - SSH_HOST=${SSH_HOST:-}
       - SSH_USER=${SSH_USER:-oficina}
@@ -76,6 +83,8 @@ services:
       # Bóveda de Obsidian (memoria de los agentes). Es la única carpeta del host con escritura;
       # los agentes solo escriben dentro de OBSIDIAN_FOLDER. Si no usas Obsidian, queda una carpeta vacía.
       - ${OBSIDIAN_HOST_DIR:-./obsidian}:/vault
+      # Encargos a Claude Code: la única carpeta nueva con escritura. El puente (fuera del contenedor) la lee y escribe.
+      - ${ENCARGOS_HOST_DIR:-./encargos}:/encargos
       # Todo lo del host se monta en SOLO LECTURA: los agentes observan, no tocan.
       - /proc:/host/proc:ro
       - /var/log:/host/var/log:ro

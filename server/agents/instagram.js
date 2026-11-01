@@ -1,6 +1,5 @@
 // Agente de contenido: arma ideas de publicaciones para Instagram cuando se lo pides. Nunca publica nada.
-import { callAi, jsonOf, AiUnavailable, aboutBusiness, personaOf } from '../ai.js';
-import { config } from '../config.js';
+import { callAi, jsonOf, AiUnavailable, aboutBusiness, effortOf, personaOf, whoIs, rulesOf } from '../ai.js';
 
 const FORMATS = ['Reel', 'Carrusel', 'Post', 'Historia'];
 const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -32,8 +31,6 @@ const SCHEMA = {
 
 export default {
   id: 'instagram',
-  // Lo que sabe de su oficio: va en sus instrucciones para la IA (diagnóstico y chat).
-  expertise: 'Tu especialidad: Instagram para negocios pequeños. Ganchos que detienen el scroll, formatos que funcionan (Reels cortos, carruseles que enseñan algo, historias con encuestas o preguntas), textos que suenan a persona y no a anuncio, y piezas que se pueden producir con un celular.',
   floor: 'negocio',
   schedule: 'manual',
 
@@ -53,25 +50,14 @@ export default {
         agent: ctx.agent,
         purpose: 'ideas',
         max_tokens: 5000,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
+        output_config: { effort: effortOf(ctx.agent), format: { type: 'json_schema', schema: SCHEMA } },
         system:
-          `Eres ${ctx.agent.name}, a cargo del contenido de Instagram${config.brand.org ? ` de ${config.brand.org}` : ''}. ${ctx.agent.expertise}\n\n` +
-          'Cómo armas las ideas:\n' +
-          '- Cada idea nace de algo real del negocio (lo que vende, a quién, cómo trabaja): si cambias el nombre del negocio por ' +
-          'otro y la idea sigue sirviendo, es demasiado genérica.\n' +
-          '- Las 5 ideas son distintas entre sí: mezcla enseñar algo, mostrar el detrás de escena, prueba social (clientes, ' +
-          'resultados) y vender directo, sin que más de una sea venta directa.\n' +
-          '- "gancho": lo primero que se lee o se escucha, máximo 12 palabras. Una pregunta, un dato o una promesa concreta; ' +
-          'nunca "¿Sabías que…?" ni "Descubre…".\n' +
-          '- "texto": listo para copiar y pegar. Frases cortas, como habla el cliente, sin mayúsculas gritadas ni más de 3 emojis, ' +
-          'y termina con una sola llamada a la acción clara (escribir por DM, comentar una palabra, guardar el post…).\n' +
-          '- "hashtags": de 3 a 8, del rubro y de la ciudad o zona si se sabe; nada de #love, #instagood ni #follow.\n' +
-          '- "visual": no generas imágenes; dejas la pauta para que otra persona la arme con un celular. En un carrusel, qué va ' +
-          'en cada slide; en un reel, las tomas en orden con su duración. Si tienes una guía de marca, nombra su estilo, el ' +
-          'formato con sus medidas, el titular y la foto.\n' +
-          '- "cuando": día y hora concretos y por qué (cuándo está mirando su cliente).\n' +
+          `${whoIs(ctx.agent)}\n\n` +
+          'Reglas fijas:\n' +
+          '- No generas imágenes: en "visual" dejas la pauta para que otra persona arme la pieza.\n' +
           '- No inventes precios, promociones, testimonios ni cifras del negocio: si la idea los necesita, deja [entre corchetes] ' +
           'lo que el dueño tiene que completar.' +
+          rulesOf(ctx.agent.instructions, 'Cómo armas las ideas') +
           personaOf(ctx.agent),
         messages: [
           {

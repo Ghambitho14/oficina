@@ -12,5 +12,8 @@ config/agentes.json
 # Las guías de cada agente hablan de tu negocio
 config/guias/
 
+# Encargos a Claude Code (ENCARGOS_HOST_DIR): tareas y respuestas del puente
+encargos/
+
 # Local de cada máquina
 .claude/
