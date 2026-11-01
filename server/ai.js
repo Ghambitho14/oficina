@@ -159,10 +159,10 @@ export async function callAi({ agent, purpose, model: override, ...params }) {
 }
 
 export const textOf = (response) =>
-  response.content
+  reveal(response.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
-    .join('\n')
+    .join('\n'))
     .trim();
 
 // El JSON de una respuesta. Algunos modelos locales lo envuelven en ```json … ```: se toma de la primera { a la última }.
@@ -178,11 +178,27 @@ export function jsonOf(response) {
 }
 
 // Oculta datos sensibles antes de mandarlos fuera del servidor:
-// la mitad de cada IPv4 (203.0.113.45 -> 203.0.x.x), emails, JWT y tokens/llaves largas.
+// cada IPv4 como apodo (203.0.113.45 -> 203.0.x.x#1), emails, JWT y tokens/llaves largas.
+// Cada IPv4 sale como un apodo fijo con su red ("45.45.x.x#3"): la IA no ve la IP, pero puede pedir una consulta con
+// el apodo (realIp lo traduce aquí) y reconocer dos alertas de la misma IP. Su respuesta vuelve con la IP real (reveal):
+// el dueño la necesita para bloquearla. Los apodos viven mientras corre la Oficina.
+const aliases = { byIp: new Map(), byAlias: new Map() };
+const aliasOf = (ip, a, b) => {
+  if (!aliases.byIp.has(ip)) {
+    const alias = `${a}.${b}.x.x#${aliases.byIp.size + 1}`;
+    aliases.byIp.set(ip, alias);
+    aliases.byAlias.set(alias, ip);
+  }
+  return aliases.byIp.get(ip);
+};
+const ALIAS = /\b\d{1,3}\.\d{1,3}\.x\.x#\d+\b/g;
+export const realIp = (target) => aliases.byAlias.get(String(target ?? '').trim()) ?? target;
+export const reveal = (text) => String(text ?? '').replace(ALIAS, (alias) => aliases.byAlias.get(alias) ?? alias);
+
 export const redact = (text) =>
   config.ai.redact
     ? text
-        .replace(/\b(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}\b/g, '$1.$2.x.x')
+        .replace(/\b((\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3})\b(?!#)/g, (ip, _, a, b) => aliasOf(ip, a, b))
         .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]')
         .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[jwt]')
         .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, '[token]')
@@ -295,7 +311,7 @@ const sshTool = (agent) => {
       type: 'object',
       properties: {
         consulta: { type: 'string', enum: names, description: 'Nombre de la consulta' },
-        ...(withTarget.length && { objetivo: { type: 'string', description: `Solo para ${withTarget.join(' y ')}: la IP o el nombre exacto del contenedor` } }),
+        ...(withTarget.length && { objetivo: { type: 'string', description: `Solo para ${withTarget.join(' y ')}: la IP tal como aparece en tu reporte (p. ej. 203.0.x.x#1) o el nombre exacto del contenedor` } }),
       },
       required: ['consulta'],
     },
@@ -327,8 +343,9 @@ export async function callWithTools(agent, params, tools, run, max) {
       const out = ++used > max ? Promise.reject(new Error('llegaste al tope de consultas')) : Promise.resolve().then(() => run(block));
       results.push(
         await out.then(
-          (text) => ({ type: 'tool_result', tool_use_id: block.id, content: String(text ?? '').trim() || '(sin salida)' }),
-          (err) => ({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true }),
+          // Lo que devuelve una herramienta (p. ej. la respuesta de otro agente, que ya trae las IPs reales) sale oculto.
+          (text) => ({ type: 'tool_result', tool_use_id: block.id, content: redact(String(text ?? '').trim()) || '(sin salida)' }),
+          (err) => ({ type: 'tool_result', tool_use_id: block.id, content: redact(`Error: ${err.message}`), is_error: true }),
         ),
       );
     }
@@ -349,7 +366,8 @@ async function callWithServer(agent, params) {
     [sshTool(agent)],
     async (block) => {
       const name = block.input?.consulta;
-      const target = Object.hasOwn(TARGETS, name) ? String(block.input?.objetivo ?? '').trim() : undefined;
+      // La IA solo conoce los apodos de las IPs: aquí se cambian por la IP real.
+      const target = Object.hasOwn(TARGETS, name) ? realIp(String(block.input?.objetivo ?? '').trim()) : undefined;
       const label = target ? `${name} ${target}` : name;
       try {
         if (!allowed.includes(name)) throw new Error(`${name} no está entre tus consultas`);
@@ -462,7 +480,8 @@ export async function chat(agent, question) {
     : 'Todavía no hay reportes: tu primer trabajo aún no termina.';
   const memory = agent.floor === 'negocio' ? '' : [memoryNotes(agent.id), memoryFor(agent, report?.findings || []).text].filter(Boolean).join('\n\n');
   // Solo los últimos mensajes, para que cada pregunta no cueste cada vez más.
-  const history = chatHistory(agent.id, 10).map((m) => ({ role: m.role, content: m.content }));
+  // Las respuestas guardadas ya traen las IPs reales: vuelven a ocultarse.
+  const history = chatHistory(agent.id, 10).map((m) => ({ role: m.role, content: redact(m.content) }));
   while (history.length && history[0].role !== 'user') history.shift();
 
   const { response, tokens } = await callWithServer(agent, {

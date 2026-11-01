@@ -134,7 +134,7 @@ function rules(me) {
 
 // Una pregunta del dueño. Devuelve { text, tokens }; quien llama guarda la conversación y la manda.
 export async function coordinar(me, question) {
-  const history = chatHistory(me.id, 10).map((m) => ({ role: m.role, content: m.content }));
+  const history = chatHistory(me.id, 10).map((m) => ({ role: m.role, content: redact(m.content) }));
   while (history.length && history[0].role !== 'user') history.shift();
   const run = async (block) => {
     const input = block.input || {};

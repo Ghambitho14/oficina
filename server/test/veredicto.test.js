@@ -87,3 +87,18 @@ test('la IA puede pedir subir la gravedad con una línea GRAVEDAD, que se quita 
   // Bajar no existe: "GRAVEDAD: info" no se acepta.
   assert.equal(parseEscalation('x\nGRAVEDAD: info — es un bot').escalation, null);
 });
+
+test('las IPs van a la IA como apodos fijos: puede consultar con el apodo y su respuesta vuelve con la IP real', async () => {
+  const { redact, realIp, reveal, textOf } = await import('../ai.js');
+  const out = redact('alerta desde 45.45.237.39 y otra vez 45.45.237.39; también 203.0.113.5');
+  const [a, b] = out.match(/\d+\.\d+\.x\.x#\d+/g).filter((x, i, all) => all.indexOf(x) === i);
+  assert.ok(!out.includes('237.39'));
+  assert.match(a, /^45\.45\.x\.x#\d+$/);
+  assert.equal(out.split(a).length - 1, 2); // la misma IP, el mismo apodo
+  assert.equal(realIp(a), '45.45.237.39');
+  assert.equal(realIp(b), '203.0.113.5');
+  assert.equal(realIp('contenedor-x'), 'contenedor-x');
+  assert.equal(reveal(`Bloquea ${a}`), 'Bloquea 45.45.237.39');
+  assert.equal(textOf({ content: [{ type: 'text', text: `Es ${b}` }] }), 'Es 203.0.113.5');
+  assert.equal(redact(out), out); // un apodo no se vuelve a ocultar
+});
