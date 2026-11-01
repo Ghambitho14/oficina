@@ -76,3 +76,14 @@ test('una llave conocida desde la tailnet queda en info pero se avisa; una desco
   assert.equal(unknown.severity, 'warn');
   assert.match(unknown.detail, /No reconozco la llave/);
 });
+
+test('la IA puede pedir subir la gravedad con una línea GRAVEDAD, que se quita del texto', async () => {
+  const { parseEscalation, parseSuggestions } = await import('../ai.js');
+  const answer = 'Es un escaneo y además intentó SSH.\n\nSUGERENCIAS:\n- Activar fail2ban\n\n**GRAVEDAD: crit** — también intentó entrar por SSH';
+  const { text, escalation } = parseEscalation(answer);
+  assert.deepEqual(escalation, { severity: 'crit', reason: 'también intentó entrar por SSH' });
+  assert.deepEqual(parseSuggestions(text).suggestions, ['Activar fail2ban']);
+  assert.equal(parseEscalation('Todo tranquilo.').escalation, null);
+  // Bajar no existe: "GRAVEDAD: info" no se acepta.
+  assert.equal(parseEscalation('x\nGRAVEDAD: info — es un bot').escalation, null);
+});

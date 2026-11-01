@@ -4,7 +4,7 @@ import { collectHost } from './collectors/host.js';
 import { collectDocker } from './collectors/docker.js';
 import { collectWeb } from './collectors/web.js';
 import { saveReport, latestReport, recentReports, addAlert, logActivity, addSample, addSiteChecks, prune, syncBoard, rememberSeen, saveReview, reviewedKeys, closeReviews, memoryNotes, removeBoardKey } from './db.js';
-import { diagnose, parseSuggestions, modelOf, aiEnabledFor } from './ai.js';
+import { diagnose, parseSuggestions, parseEscalation, modelOf, aiEnabledFor } from './ai.js';
 import { sendReport, telegramEnabled, ICON } from './notify/telegram.js';
 import { watchedPages } from './agents-file.js';
 import { monitorEnabled, fetchOverview, toHost, toContainers, toSites, eventTitle, dayOf } from './collectors/monitor.js';
@@ -153,7 +153,7 @@ export async function runAgent(agent, ctx, input) {
     // Un agente puede devolver las alertas ya juzgadas (otra gravedad, o sin las falsas alarmas): ciberseguridad.js.
     const { findings: raw, metrics, events: judged } = await agent.run({ ...ctx, log, input, agent });
     const findings = agent.schedule === 'manual' ? raw : applyReviews(agent.id, raw);
-    const status = statusOf(findings);
+    let status = statusOf(findings);
     const previous = latestReport(agent.id);
     const events = judged || input?.events || [];
     // Lo que el agente recuerda de Obsidian. Si el dueño escribió algo nuevo en sus notas, la firma cambia
@@ -181,6 +181,7 @@ export async function runAgent(agent, ctx, input) {
       report.aiSuggestions = previous.aiSuggestions;
       // Para el panel: de qué modelo y de cuándo es el diagnóstico que se reusa.
       Object.assign(report, { aiModel: previous.aiModel, aiAt: previous.aiAt ?? previous.createdAt, aiReused: true });
+      if (previous.aiEscalation) report.aiEscalation = previous.aiEscalation;
       if (report.aiSignature) logActivity(agent.id, 'ia', 'Reusé el diagnóstico anterior porque nada cambió (0 tokens)');
     } else if (goodNews) {
       // Una recuperación: se avisa sin diagnóstico.
@@ -195,13 +196,24 @@ export async function runAgent(agent, ctx, input) {
         return null;
       });
       if (answer) {
-        const { text, suggestions } = parseSuggestions(answer);
+        // Primero la línea GRAVEDAD (puede venir después de las sugerencias) y luego las sugerencias.
+        const { text: rest, escalation } = parseEscalation(answer);
+        if (escalation) report.aiEscalation = escalation;
+        const { text, suggestions } = parseSuggestions(rest);
         report.aiSummary = text || answer;
         report.aiSuggestions = suggestions;
       }
       if (report.aiSummary) Object.assign(report, { aiModel: modelOf(agent), aiAt: new Date().toISOString() });
       // La IA estaba prendida pero no respondió: el panel lo dice en vez de "sin IA".
       else if (aiEnabledFor(agent)) report.aiFailed = true;
+    }
+
+    // Lo que encontró la IA al investigar puede subir la gravedad que dieron las reglas, nunca bajarla: lo que lee (whois,
+    // logs) lo pudo escribir un atacante.
+    const raised = report.aiEscalation && RANK[report.aiEscalation.severity] > RANK[status] ? report.aiEscalation : null;
+    if (raised) {
+      status = report.status = raised.severity;
+      if (!report.aiReused) logActivity(agent.id, 'ia', `Al investigar subí la gravedad a ${STATUS_TEXT[raised.severity]}: ${raised.reason}`);
     }
 
     saveReport(agent.id, report);
@@ -252,7 +264,8 @@ export async function runAgent(agent, ctx, input) {
     const flagged = findings.filter((f) => f.urgent);
     const requested = (input?.manual === true || flagged.length > 0) && agent.schedule !== 'manual';
     if (events.length || changed || requested) {
-      const severity = events.length ? worstOf(events) : status;
+      const fromEvents = events.length ? worstOf(events) : status;
+      const severity = raised && RANK[raised.severity] > RANK[fromEvents] ? raised.severity : fromEvents;
       // El mensaje va breve: la lista completa queda en el .md.
       const titles = [...flagged, ...important.filter((f) => !f.urgent)].map((f) => f.title);
       const brief = titles.slice(0, 3).join(' · ') + (titles.length > 3 ? ` y ${titles.length - 3} más` : '');
@@ -277,7 +290,8 @@ export async function runAgent(agent, ctx, input) {
       const diagnosis = goodNews
         ? `Volvió a funcionar.${pending || ' No veo otros problemas.'}`
         : report.aiSummary
-          ? `${report.aiReused ? '(Lo mismo que la vez anterior: nada cambió.)\n' : ''}${report.aiSummary}`
+          ? `${report.aiReused ? '(Lo mismo que la vez anterior: nada cambió.)\n' : ''}${report.aiSummary}` +
+            (raised ? `\n\nSubí la gravedad al investigar: ${raised.reason || 'ver el diagnóstico'}` : '')
           : verdicts.length
             ? `Lo que averigüé:\n${bullets(verdicts)}${report.aiFailed ? '\n(La IA no respondió: esto sale de mis reglas.)' : ''}${pending}`
             : !problems
