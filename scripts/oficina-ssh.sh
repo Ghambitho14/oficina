@@ -101,7 +101,8 @@ case "$name" in
     ;;
   ip)
     # Todo lo que el servidor sabe de una IP, en líneas "clave: valor" (las lee parseIp en server/collectors/ssh.js).
-    snort=$({ cat /var/log/snort/snort.alert.fast; zcat -f /var/log/snort/snort.alert.fast.1.gz; } 2>/dev/null | grep -aF " $target:")
+    # Primero el log rotado (ayer) y después el de hoy: así la primera y la última alerta quedan en orden.
+    snort=$({ zcat -f /var/log/snort/snort.alert.fast.1.gz; cat /var/log/snort/snort.alert.fast; } 2>/dev/null | grep -aF " $target:")
     echo "snort_alertas: $(printf '%s' "$snort" | grep -c .)"
     printf '%s\n' "$snort" | grep . | sed -E 's/^.*\[\*\*\] \[[0-9:]+\] (.*) \[\*\*\].*$/\1/' | sort | uniq -c | sort -rn | head -n 5 |
       sed -E 's/^ *([0-9]+) (.*)$/snort_regla: \2 (\1)/'
