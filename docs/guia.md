@@ -147,6 +147,13 @@ puerto revisado sigue vigilado: Leo avisa si hoy hay alertas de Snort contra él
 Internet (sin contar tu tailnet ni redes privadas). Por SSH esto último usa la consulta `conexiones_puertos`: copia de
 nuevo `scripts/oficina-ssh.sh` al servidor. Si agregas el puerto a `vigila.puertosPermitidos`, Leo deja de vigilarlo.
 
+**Accesos SSH.** Leo dice la hora (en `TIMEZONE`), la IP, cuántas veces y de dónde viene cada login como root o desde
+Internet: desde tu tailnet o una red interna (Docker, Coolify) es de atención; desde Internet es **crítico**. Los
+accesos del usuario de la Oficina (`SSH_USER`) no cuentan. En modo alertas el monitor no avisa de los logins, así que
+cada `AGENT_INTERVAL_MIN` minutos la Oficina mira los accesos (una consulta, sin IA) y, si hay uno nuevo como root o
+desde Internet, Leo revisa en ese momento y te avisa por Telegram aunque ya estuviera en amarillo. Si fuiste tú,
+márcalo como Revisado: vale para esa IP, y una IP distinta vuelve a avisar.
+
 ### Para ahorrar tokens
 
 - Por defecto usa `claude-haiku-5-5` (el modelo más barato) con esfuerzo bajo, y medio solo cuando hay un problema

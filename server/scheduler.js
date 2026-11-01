@@ -10,6 +10,7 @@ import { watchedPages } from './agents-file.js';
 import { monitorEnabled, fetchOverview, toHost, toContainers, toSites, eventTitle, dayOf } from './collectors/monitor.js';
 import { recordRun, memoryFor } from './vault.js';
 import { sshEnabled, sshQuery } from './collectors/ssh.js';
+import { urgentLogins } from './agents/ciberseguridad.js';
 
 const RANK = { info: 0, ok: 0, warn: 1, crit: 2 };
 const statusOf = (findings) =>
@@ -113,6 +114,8 @@ export function createContext() {
     local: config.localChecks,
     monitor,
     ssh,
+    // El último reporte guardado de un agente (antes de esta revisión): para ver qué es nuevo.
+    lastReport: latestReport,
     host: memo(config.localChecks ? collectHost : remote((o) => toHost(o.host))),
     docker: memo(config.localChecks ? collectDocker : remote((o) => toContainers(o.containers))),
     // Las URLs de WATCH_URLS se revisan desde aquí; los dominios del monitor se suman sin repetir.
@@ -242,11 +245,13 @@ export async function runAgent(agent, ctx, input) {
 
     // A Telegram, el informe de cada tanda de alertas que investigó (también las recuperaciones), de cada revisión
     // que alguien pidió (aunque nada haya cambiado) y, en las demás revisiones, los cambios de estado.
-    const requested = input?.manual === true && agent.schedule !== 'manual';
+    // Un acceso SSH nuevo como root o desde Internet se avisa siempre, aunque el agente ya estuviera en amarillo.
+    const urgent = findings.some((f) => f.urgent && f.severity !== 'info');
+    const requested = (input?.manual === true || urgent) && agent.schedule !== 'manual';
     if (events.length || changed || requested) {
       const severity = events.length ? worstOf(events) : status;
       // El mensaje va breve: la lista completa queda en el .md.
-      const titles = important.map((f) => f.title);
+      const titles = [...important].sort((a, b) => Boolean(b.urgent) - Boolean(a.urgent)).map((f) => f.title);
       const brief = titles.slice(0, 3).join(' · ') + (titles.length > 3 ? ` y ${titles.length - 3} más` : '');
       const what = events.length
         ? events.length === 1
@@ -334,11 +339,25 @@ export async function reviewNewDay(now = Date.now()) {
   await Promise.all(agents.map((a) => runAgent(a, ctx).catch(() => null)));
 }
 
+// Los accesos SSH no llegan como alerta del monitor: en cada vuelta se miran (una consulta, sin IA) y si hay uno nuevo
+// como root o desde Internet, el agente de ciberseguridad revisa en ese momento y avisa.
+export async function watchLogins() {
+  const agent = activeAgents().find((a) => a.type === 'ciberseguridad');
+  if (!agent || working.has(agent.id)) return;
+  const ctx = createContext();
+  const fresh = await urgentLogins(ctx, agent.id);
+  if (!fresh.length) return;
+  const list = fresh.map((a) => `${a.user} desde ${a.ip}`).join(', ');
+  logActivity(agent.id, 'lectura', `Vi ${fresh.length === 1 ? 'un acceso SSH nuevo' : `${fresh.length} accesos SSH nuevos`} (${list}): reviso ahora`);
+  await runAgent(agent, ctx);
+}
+
 // En modo "alertas" los agentes no revisan solos: el temporizador guarda muestras para las gráficas
 // y ellos trabajan cuando llega una alerta del monitor, alguien pide una revisión o empieza el día (reviewNewDay).
 async function sampleOnly() {
   if (!monitorAgentsOn()) return;
   await reviewNewDay();
+  await watchLogins().catch((err) => console.error('[accesos ssh]', err.message));
   await saveSamples(createContext()).catch((err) => console.error('[muestras]', err.message));
   prune();
 }

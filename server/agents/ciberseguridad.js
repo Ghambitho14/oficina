@@ -68,6 +68,72 @@ export function portUse(ports, snortByPort = [], connections = []) {
   return out;
 }
 
+// ---------- Accesos SSH ----------
+// De dónde viene una IP: tu tailnet (100.64.0.0/10), una red interna (Docker, la LAN) o Internet.
+export function originOf(ip) {
+  const [a, b] = String(ip).split('.').map(Number);
+  if (a === 100 && b >= 64 && b <= 127) return 'tailnet';
+  if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || /^(::1$|f[cd])/i.test(ip)) return 'interna';
+  return 'internet';
+}
+const ORIGIN_TEXT = { tailnet: 'desde tu tailnet', interna: 'desde una red interna (p. ej. Docker o Coolify)', internet: 'desde Internet' };
+
+// La hora en la zona de TIMEZONE; si no es de hoy, también el día.
+const CLOCK = new Intl.DateTimeFormat('es-CL', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
+const DATE = new Intl.DateTimeFormat('es-CL', { timeZone: config.timezone, day: '2-digit', month: '2-digit' });
+export const clockOf = (iso, now = new Date()) => {
+  const d = new Date(iso);
+  return DATE.format(d) === DATE.format(now) ? CLOCK.format(d) : `${CLOCK.format(d)} del ${DATE.format(d)}`;
+};
+
+const loginKey = (a) => `${a.at}|${a.user}|${a.ip}`;
+// Los accesos que no estaban en la revisión anterior. Sin revisión anterior no hay con qué comparar: ninguno es nuevo.
+export function newLogins(accepted = [], previous) {
+  if (!previous) return [];
+  const seen = new Set(previous.map(loginKey));
+  return accepted.filter((a) => !seen.has(loginKey(a)));
+}
+// Los que hay que avisar en el momento: entrar como root o desde Internet.
+export const isUrgent = (a) => a.user === 'root' || originOf(a.ip) === 'internet';
+
+// Un hallazgo por usuario e IP, con la hora, cuántas veces y de dónde. Desde Internet es crítico: puede ser un atacante.
+// `urgent` marca los que traen un acceso nuevo: la Oficina avisa por Telegram aunque el estado no cambie.
+export function loginFindings(accepted = [], fresh = [], now = new Date()) {
+  const freshKeys = new Set(fresh.map(loginKey));
+  const groups = new Map();
+  for (const a of accepted.filter(isUrgent)) groups.set(`${a.user}|${a.ip}`, [...(groups.get(`${a.user}|${a.ip}`) || []), a]);
+  return [...groups.values()].map((list) => {
+    list.sort((x, y) => x.at.localeCompare(y.at));
+    const [first, last, n] = [list[0], list.at(-1), list.length];
+    const origin = originOf(first.ip);
+    const who = first.user === 'root' ? 'como root' : `de ${first.user}`;
+    const how = [...new Set(list.map((a) => ({ publickey: 'llave', password: 'contraseña' })[a.method] || a.method))].join(' y ');
+    const when = n === 1 ? `a las ${clockOf(first.at, now)}` : `entre las ${clockOf(first.at, now)} y las ${clockOf(last.at, now)}`;
+    const advice =
+      origin === 'internet'
+        ? ' Si no fuiste tú, puede ser un atacante: mira quién entró (sudo last -i) y cambia las llaves de ese usuario.'
+        : first.user === 'root'
+          ? ' Mejor entrar con un usuario normal y usar sudo.'
+          : '';
+    return {
+      severity: origin === 'internet' ? 'crit' : 'warn',
+      title: `Login SSH ${who} desde ${first.ip} a las ${clockOf(last.at, now)}`,
+      detail: `${n === 1 ? '1 acceso' : `${n} accesos`} con ${how} ${when}, ${ORIGIN_TEXT[origin]}.${advice}`,
+      note: `Login SSH ${who} desde ${first.ip}`,
+      ...(list.some((a) => freshKeys.has(loginKey(a))) && { urgent: true }),
+    };
+  });
+}
+
+// Para la vigilancia entre revisiones (scheduler.js): los accesos nuevos como root o desde Internet desde su último reporte.
+export async function urgentLogins(ctx, agentId) {
+  const checks = hostChecks(ctx);
+  const ssh = checks ? await checks.ssh() : null;
+  const before = ctx.lastReport(agentId)?.metrics?.ssh;
+  if (!ssh?.available || !before?.available) return [];
+  return newLogins(ssh.accepted, before.accepted).filter(isUrgent);
+}
+
 // Ej.: "5 updates can be applied immediately. 2 of these updates are standard security updates."
 export function parseUpdates(text) {
   const total = parseInt(text.match(/(\d+) updates? can be applied/)?.[1] || '0', 10);
@@ -95,7 +161,7 @@ function hostChecks(ctx) {
   if (!ctx.ssh) return null;
   return {
     from: 'ssh',
-    ssh: () => ctx.ssh('accesos_ssh').then((t) => parseSsh(t), (err) => ({ available: false, reason: `No pude consultar por SSH: ${err.message}` })),
+    ssh: () => ctx.ssh('accesos_ssh').then((t) => parseSsh(t, new Date(), { ignore: [config.ssh.user] }), (err) => ({ available: false, reason: `No pude consultar por SSH: ${err.message}` })),
     ports: () => ctx.ssh('puertos').then(parseSs, () => null),
     // Un oficina-ssh viejo en el servidor no conoce esta consulta: queda en null.
     connections: () => ctx.ssh('conexiones_puertos').then(parseConnections, () => null),
@@ -143,7 +209,8 @@ export default {
       else if (ssh.failed24h >= t.intentosSsh) add('warn', `${ssh.failed24h} intentos SSH fallidos en 24 h`, `Desde ${ssh.uniqueIps} IPs distintas`);
       const pwLogins = ssh.accepted.filter((a) => a.method === 'password');
       if (pwLogins.length) add('warn', 'Hubo logins SSH con contraseña', 'Usar solo llaves SSH es más seguro.');
-      if (ssh.accepted.some((a) => a.user === 'root')) add('warn', 'Login SSH como root', 'Mejor entrar con un usuario normal y usar sudo.');
+      const before = ctx.lastReport?.(ctx.agent.id)?.metrics?.ssh;
+      findings.push(...loginFindings(ssh.accepted, newLogins(ssh.accepted, before?.available ? before.accepted : null)));
     }
 
     const ports = (checks && (await checks.ports())) || { exposed: [] };
