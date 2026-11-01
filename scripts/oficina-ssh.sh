@@ -107,11 +107,17 @@ case "$name" in
       sed -E 's/^ *([0-9]+) (.*)$/snort_regla: \2 (\1)/'
     printf '%s\n' "$snort" | grep . | sed -nE 's/.* -> .*:([0-9]+)$/\1/p' | sort | uniq -c | sort -rn | head -n 5 |
       sed -E 's/^ *([0-9]+) (.*)$/snort_puerto: \2 (\1)/'
+    echo "snort_puertos_distintos: $(printf '%s\n' "$snort" | grep . | sed -nE 's/.* -> .*:([0-9]+)$/\1/p' | sort -u | grep -c .)"
+    printf '%s\n' "$snort" | grep . | head -n 1 | sed -E 's/^([^ ]+).*/snort_primera: \1/'
     printf '%s\n' "$snort" | grep . | tail -n 1 | sed -E 's/^([^ ]+).*/snort_ultima: \1/'
     auth=$(grep -aF " $target " /var/log/auth.log 2>/dev/null | grep -a sshd)
     echo "ssh_fallidos: $(printf '%s' "$auth" | grep -Eac 'Failed|Invalid user')"
     echo "ssh_aceptados: $(printf '%s' "$auth" | grep -ac 'Accepted')"
     printf '%s\n' "$auth" | grep -a 'Accepted' | tail -n 3 | sed -E 's/.*Accepted ([a-z-]+) for ([^ ]+) from.*/ssh_acceso: \2 con \1/'
+    printf '%s\n' "$auth" | grep -a 'Accepted' | sed -E 's/.*Accepted [a-z-]+ for ([^ ]+) from.*/\1/' | sort | uniq -c | sort -rn | head -n 5 |
+      sed -E 's/^ *([0-9]+) (.*)$/ssh_usuario: \2 (\1)/'
+    # Conexiones TCP abiertas ahora con esa IP (en "ss ... state" la 4.ª columna es la remota).
+    ss -tnH state established | awk -v ip="$target" '{ a = $4; sub(/:[0-9]+$/, "", a); gsub(/[][]/, "", a); sub(/^::ffff:/, "", a); if (a == ip) n++ } END { print "conexiones_ahora: " n + 0 }'
     peer=$(tailscale status 2>/dev/null | awk -v ip="$target" '$1 == ip { print $2 }')
     echo "tailnet: ${peer:-no}"
     sudo -n "$ROOT" ip_bloqueada "$target" 2>/dev/null || echo "bloqueada: desconocido"
@@ -119,7 +125,7 @@ case "$name" in
       sed -E 's/^/whois: /'
     true
     ;;
-  firewall | contenedores | logs | db_conexiones | db_sin_rls | db_logins)
+  firewall | contenedores | logs | llaves_ssh | db_conexiones | db_sin_rls | db_logins)
     # Necesitan root: las responde oficina-root, que tiene su propia lista y vuelve a validar el objetivo.
     exec sudo -n "$ROOT" "$name" ${target:+"$target"}
     ;;

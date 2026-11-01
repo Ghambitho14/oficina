@@ -62,7 +62,9 @@ export function parseSsh(text, now = new Date(), { ignore = [] } = {}) {
       continue;
     }
     const ok = line.match(/Accepted (\S+) for (\S+) from ([\da-fA-F:.]+)/);
-    if (ok && !ignore.includes(ok[2])) accepted.push({ method: ok[1], user: ok[2], ip: ok[3], at: date.toISOString() });
+    // Con llave, sshd anota también su huella ("ssh2: ED25519 SHA256:…"): así se sabe qué llave entró.
+    const key = line.match(/ssh2: \S+ (SHA256:\S+)/)?.[1];
+    if (ok && !ignore.includes(ok[2])) accepted.push({ method: ok[1], user: ok[2], ip: ok[3], at: date.toISOString(), ...(key && { key }) });
   }
 
   const topIps = Object.entries(failedByIp)

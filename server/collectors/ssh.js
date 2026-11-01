@@ -23,7 +23,8 @@ export const QUERIES = {
   snort: 'Las últimas 100 alertas de Snort (detector de intrusos)',
   conexiones: 'Conexiones TCP abiertas ahora, contadas por IP remota',
   conexiones_puertos: 'Conexiones TCP abiertas ahora, contadas por puerto del servidor e IP remota',
-  ip: 'Todo sobre una IP (objetivo = la IP): sus alertas de Snort, intentos SSH, si es de la tailnet, si está bloqueada y de quién es (whois)',
+  ip: 'Todo sobre una IP (objetivo = la IP): sus alertas de Snort, intentos SSH, conexiones de ahora, si es de la tailnet, si está bloqueada y de quién es (whois)',
+  llaves_ssh: 'Huella y comentario de cada llave en los authorized_keys de root y de los usuarios (sin la llave)',
   firewall: 'Reglas de entrada del firewall, IPs bloqueadas a mano y baneadas por fail2ban',
   contenedores: 'Contenedores de Docker con su estado e imagen',
   logs: 'Las últimas 200 líneas del log de un contenedor (objetivo = su nombre exacto, de "contenedores")',
@@ -46,7 +47,10 @@ export const TARGETS = {
 
 // La salida de "ip" ("clave: valor" por línea) como objeto. Las claves repetidas (reglas, accesos) van en listas.
 export function parseIp(text) {
-  const out = { snortAlerts: 0, snortRules: [], snortPorts: [], snortLast: null, sshFailed: 0, sshAccepted: 0, sshLogins: [], tailnet: null, blocked: null, whois: [] };
+  const out = {
+    snortAlerts: 0, snortRules: [], snortPorts: [], snortPortCount: null, snortFirst: null, snortLast: null,
+    sshFailed: 0, sshAccepted: 0, sshLogins: [], sshUsers: [], connectionsNow: null, tailnet: null, blocked: null, whois: [],
+  };
   for (const line of String(text).split('\n')) {
     const m = line.match(/^([a-z_]+): (.*)$/);
     if (!m) continue;
@@ -54,7 +58,13 @@ export function parseIp(text) {
     if (key === 'snort_alertas') out.snortAlerts = parseInt(value, 10) || 0;
     else if (key === 'snort_regla') out.snortRules.push(value);
     else if (key === 'snort_puerto') out.snortPorts.push(value);
+    else if (key === 'snort_puertos_distintos') out.snortPortCount = parseInt(value, 10) || 0;
+    else if (key === 'snort_primera') out.snortFirst = value;
     else if (key === 'snort_ultima') out.snortLast = value;
+    else if (key === 'ssh_usuario') {
+      const u = value.match(/^(\S+) \((\d+)\)$/);
+      if (u) out.sshUsers.push({ user: u[1], n: Number(u[2]) });
+    } else if (key === 'conexiones_ahora') out.connectionsNow = parseInt(value, 10) || 0;
     else if (key === 'ssh_fallidos') out.sshFailed = parseInt(value, 10) || 0;
     else if (key === 'ssh_aceptados') out.sshAccepted = parseInt(value, 10) || 0;
     else if (key === 'ssh_acceso') out.sshLogins.push(value);
@@ -65,7 +75,17 @@ export function parseIp(text) {
   return out;
 }
 
-export const sshEnabled = () => Boolean(config.ssh.host);
+// La salida de "llaves_ssh" ("llave: usuario bits huella comentario (tipo)") como lista. Sin comentario, el nombre es "".
+export function parseKeys(text) {
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    const m = line.match(/^llave: (\S+) \d+ (SHA256:\S+) ?(.*?) \(([A-Z0-9-]+)\)$/);
+    if (m) out.push({ user: m[1], fingerprint: m[2], name: m[3] === 'no comment' ? '' : m[3], type: m[4] });
+  }
+  return out;
+}
+
+export const sshEnabled =() => Boolean(config.ssh.host);
 
 // Sin known_hosts se acepta la huella la primera vez y se guarda en /tmp (en Docker es un tmpfs).
 const tmpKnownHosts = path.join(os.tmpdir(), 'oficina_known_hosts');

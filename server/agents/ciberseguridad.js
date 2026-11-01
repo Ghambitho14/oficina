@@ -5,13 +5,93 @@ import { config } from '../config.js';
 import { collectSsh, parseSsh } from '../collectors/sshlog.js';
 import { collectPorts, parseSs, collectConnections, parseConnections } from '../collectors/ports.js';
 import { fetchSnortToday, eventFinding } from '../collectors/monitor.js';
-import { TARGETS, parseIp } from '../collectors/ssh.js';
+import { TARGETS, parseIp, parseKeys } from '../collectors/ssh.js';
 
-// Las IPs de origen de las alertas de Snort ("… 5 alertas desde 203.0.113.5 en 10 min"), sin repetir y como mucho 3.
+// La IP de origen de una alerta de Snort ("… 5 alertas desde 203.0.113.5 en 10 min").
+const ipOf = (e) => String(e.detail || '').match(/desde ([0-9a-fA-F.:]+)/)?.[1];
+// Las IPs de origen de las alertas de Snort, sin repetir y como mucho 3.
 export const snortIps = (events) =>
-  [...new Set(events.filter((e) => e.kind === 'snort').map((e) => String(e.detail || '').match(/desde ([0-9a-fA-F.:]+)/)?.[1]))]
+  [...new Set(events.filter((e) => e.kind === 'snort').map(ipOf))]
     .filter((ip) => ip && TARGETS.ip(ip))
     .slice(0, 3);
+
+// ---------- Las consultas de la propia Oficina ----------
+// Cada SSH de la Oficina al servidor puede disparar una regla de Snort de "SSH desconocido", y esa alerta la despierta
+// otra vez: un ciclo cada pocos minutos. Cuando la consulta "ip" muestra que una IP solo entra como el usuario de la
+// Oficina, se recuerda aquí y sus alertas de SSH se descartan sin volver a consultar (monitor-feed.js).
+const ownIps = new Set();
+export const learnOwnIp = (ip, info, user = config.ssh.user) => {
+  const own = info.sshUsers.length > 0 && info.sshUsers.every((u) => u.user === user) && !info.sshFailed;
+  if (own) ownIps.add(ip);
+  else ownIps.delete(ip);
+  return own;
+};
+export const isOwnSshAlert = (e) => e.kind === 'snort' && /ssh/i.test(String(e.detail || '')) && ownIps.has(ipOf(e));
+export const forgetOwnIps = () => ownIps.clear();
+
+// ---------- Veredicto de una IP de Snort ----------
+// Lo que haría una persona con la consulta "ip" en la mano: decidir con reglas qué fue y qué hacer, sin depender de la IA.
+const portOf = (p) => String(p).split(' ')[0];
+const WEB_PORTS = ['80', '443'];
+// "10/30-19:35:26.123456" (formato de snort.alert.fast) → segundos del año, para medir cuánto duró la ráfaga.
+const snortSec = (ts) => {
+  const m = String(ts || '').match(/^(\d{2})\/(\d{2})-(\d{2}):(\d{2}):(\d{2})/);
+  return m ? Date.UTC(2000, m[1] - 1, m[2], m[3], m[4], m[5]) / 1000 : null;
+};
+const lasted = (info) => {
+  const [a, b] = [snortSec(info.snortFirst), snortSec(info.snortLast)];
+  if (a === null || b === null || b < a) return '';
+  const s = b - a;
+  return s < 60 ? ` en ${s} s` : s < 3600 ? ` en ${Math.round(s / 60)} min` : ` en ${Math.round(s / 3600)} h`;
+};
+
+// { severity, title, detail } o null si las reglas no alcanzan para decidir (queda la gravedad de la alerta).
+export function ipVerdict(ip, info, ownUser = config.ssh.user) {
+  const ports = info.snortPorts.map(portOf);
+  const portCount = info.snortPortCount ?? ports.length;
+  const others = info.sshUsers.filter((u) => u.user !== ownUser);
+  const blocked = info.blocked ? ` Ya está bloqueada (${info.blocked}).` : '';
+  const now = info.connectionsNow ? ` Tiene ${info.connectionsNow} ${info.connectionsNow === 1 ? 'conexión abierta' : 'conexiones abiertas'} ahora.` : '';
+  if (info.tailnet)
+    return { severity: 'info', title: `${ip} es ${info.tailnet}, un equipo de tu tailnet: falsa alarma`, detail: 'Qué hacer: nada.' };
+  if (info.sshUsers.length && !others.length && !info.sshFailed)
+    return { severity: 'info', title: `${ip} es la Oficina consultando por SSH: falsa alarma`, detail: `Solo entra como ${ownUser}. Dejo de avisar por sus consultas.` };
+  if (others.length && originOf(ip) === 'internet')
+    return {
+      severity: 'crit',
+      title: `${ip} entró por SSH desde Internet como ${others.map((u) => u.user).join(' y ')}`,
+      detail: `${info.sshAccepted} ${info.sshAccepted === 1 ? 'acceso' : 'accesos'}.${now} Qué hacer: si no fuiste tú, bloquéala en el firewall ya y cambia las llaves de ese usuario.${blocked}`,
+    };
+  if (info.sshFailed)
+    return {
+      severity: 'crit',
+      title: `${ip} intenta entrar por SSH (fuerza bruta)`,
+      detail: `${info.sshFailed} intentos fallidos.${now} Qué hacer: ${info.blocked ? `nada más, ya está bloqueada (${info.blocked}).` : 'bloquéala en el firewall y revisa que fail2ban esté activo.'}`,
+    };
+  if (ports.length && ports.every((p) => WEB_PORTS.includes(p)))
+    return {
+      severity: info.connectionsNow ? 'warn' : 'info',
+      title: `${ip} es un bot o rastreador web, no un escaneo de puertos`,
+      detail: `${info.snortAlerts} alertas solo a los puertos ${[...new Set(ports)].join(' y ')}${lasted(info)}.${now} Qué hacer: nada, salvo que se repita seguido.${blocked}`,
+    };
+  if (portCount >= 5)
+    return {
+      severity: 'warn',
+      title: `${ip} escaneó ${portCount} puertos distintos`,
+      detail: `${info.snortAlerts} alertas${lasted(info)}.${now} Qué hacer: ${blocked ? 'nada más.' : 'si vuelve a aparecer, bloquéala en el firewall.'}${blocked}`,
+    };
+  return null;
+}
+
+// La alerta con la gravedad del veredicto (para el color de Telegram y la pizarra). Las de la propia Oficina se quitan.
+export function judgeEvents(events, verdicts) {
+  return events
+    .filter((e) => !isOwnSshAlert(e))
+    .map((e) => {
+      const v = e.kind === 'snort' && verdicts.get(ipOf(e));
+      return v ? { ...e, severity: v.severity, verdict: v.title } : e;
+    });
+}
 
 // Pregunta al servidor todo lo que sabe de cada IP (consulta "ip").
 const lookIps = (ctx, events) =>
@@ -98,7 +178,13 @@ export const isUrgent = (a) => a.user === 'root' || originOf(a.ip) === 'internet
 
 // Un hallazgo por usuario e IP, con la hora, cuántas veces y de dónde. Desde Internet es crítico: puede ser un atacante.
 // `urgent` marca los que traen un acceso nuevo: la Oficina avisa por Telegram aunque el estado no cambie.
-export function loginFindings(accepted = [], fresh = [], now = new Date()) {
+// `keys` (consulta llaves_ssh) da nombre a cada huella: una llave conocida desde la tailnet o la red interna queda en
+// info, pero igual se avisa (en verde), por si el equipo de esa llave estuviera comprometido.
+export function loginFindings(accepted = [], fresh = [], now = new Date(), keys = []) {
+  const keyName = (a) => {
+    const k = a.key && keys.find((x) => x.fingerprint === a.key && x.user === a.user);
+    return k ? k.name || k.fingerprint : null;
+  };
   const freshKeys = new Set(fresh.map(loginKey));
   const groups = new Map();
   for (const a of accepted.filter(isUrgent)) groups.set(`${a.user}|${a.ip}`, [...(groups.get(`${a.user}|${a.ip}`) || []), a]);
@@ -109,15 +195,20 @@ export function loginFindings(accepted = [], fresh = [], now = new Date()) {
     const who = first.user === 'root' ? 'como root' : `de ${first.user}`;
     const how = [...new Set(list.map((a) => ({ publickey: 'llave', password: 'contraseña' })[a.method] || a.method))].join(' y ');
     const when = n === 1 ? `a las ${clockOf(first.at, now)}` : `entre las ${clockOf(first.at, now)} y las ${clockOf(last.at, now)}`;
+    const names = list.map(keyName);
+    const known = origin !== 'internet' && names.every(Boolean);
+    const withKey = known ? ` con la llave ${[...new Set(names)].join(' y ')}` : '';
     const advice =
       origin === 'internet'
         ? ' Si no fuiste tú, puede ser un atacante: mira quién entró (sudo last -i) y cambia las llaves de ese usuario.'
-        : first.user === 'root'
-          ? ' Mejor entrar con un usuario normal y usar sudo.'
-          : '';
+        : known
+          ? ' Es una llave conocida. Si a esa hora no estabas usando ese equipo, revísalo.'
+          : first.user === 'root'
+            ? ` Mejor entrar con un usuario normal y usar sudo.${keys.length ? ' No reconozco la llave: revisa authorized_keys.' : ''}`
+            : '';
     return {
-      severity: origin === 'internet' ? 'crit' : 'warn',
-      title: `Login SSH ${who} desde ${first.ip} a las ${clockOf(last.at, now)}`,
+      severity: origin === 'internet' ? 'crit' : known ? 'info' : 'warn',
+      title: `Login SSH ${who}${withKey} desde ${first.ip} a las ${clockOf(last.at, now)}`,
       detail: `${n === 1 ? '1 acceso' : `${n} accesos`} con ${how} ${when}, ${ORIGIN_TEXT[origin]}.${advice}`,
       note: `Login SSH ${who} desde ${first.ip}`,
       ...(list.some((a) => freshKeys.has(loginKey(a))) && { urgent: true }),
@@ -157,6 +248,7 @@ function hostChecks(ctx) {
       ports: () => collectPorts().catch(() => ({ exposed: [] })),
       connections: () => collectConnections().catch(() => null),
       updates: pendingUpdates,
+      keys: async () => [],
     };
   if (!ctx.ssh) return null;
   return {
@@ -166,6 +258,8 @@ function hostChecks(ctx) {
     // Un oficina-ssh viejo en el servidor no conoce esta consulta: queda en null.
     connections: () => ctx.ssh('conexiones_puertos').then(parseConnections, () => null),
     updates: () => ctx.ssh('actualizaciones').then(parseUpdates, () => null),
+    // Un oficina-root viejo no conoce llaves_ssh: sin nombres, los accesos se avisan como antes.
+    keys: () => ctx.ssh('llaves_ssh').then(parseKeys, () => []),
   };
 }
 
@@ -187,14 +281,28 @@ export default {
     // Lo que avisó el monitor va primero: es el motivo de esta revisión.
     for (const e of ctx.input?.events || []) findings.push(eventFinding(e));
 
-    // Si la alerta es de Snort, se averigua quién es la IP antes de diagnosticar (con SSH).
+    // Si la alerta es de Snort, se averigua quién es la IP antes de diagnosticar (con SSH) y se decide con reglas qué
+    // fue: ese veredicto le pone la gravedad a la alerta y la IA solo lo explica.
     const ips = ctx.ssh ? await lookIps(ctx, ctx.input?.events || []) : [];
+    const verdicts = new Map();
     for (const r of ips) {
       if (r.error) add('info', `No pude averiguar más de ${r.ip}`, r.error);
       else {
-        add('info', ipTitle(r.ip, r.info), ipDetail(r.info));
         ctx.log(`Averigüé por SSH quién es ${r.ip}: ${ipDetail(r.info)}`);
+        if (learnOwnIp(r.ip, r.info)) ctx.log(`${r.ip} solo entra como ${config.ssh.user}: son mis propias consultas, dejo de revisar sus alertas de SSH`);
+        const v = ipVerdict(r.ip, r.info);
+        if (v) {
+          verdicts.set(r.ip, v);
+          findings.push({ ...v, detail: `${v.detail} (${ipDetail(r.info)})`, verdict: true });
+          ctx.log(`Veredicto sobre ${r.ip}: ${v.title}`);
+        } else add('info', ipTitle(r.ip, r.info), ipDetail(r.info));
       }
+    }
+    const events = judgeEvents(ctx.input?.events || [], verdicts);
+    // La alerta como hallazgo lleva la gravedad del veredicto.
+    for (const [i, e] of (ctx.input?.events || []).entries()) {
+      const v = e.kind === 'snort' && verdicts.get(ipOf(e));
+      if (v) findings[i] = { ...findings[i], severity: v.severity };
     }
 
     const checks = hostChecks(ctx);
@@ -210,7 +318,8 @@ export default {
       const pwLogins = ssh.accepted.filter((a) => a.method === 'password');
       if (pwLogins.length) add('warn', 'Hubo logins SSH con contraseña', 'Usar solo llaves SSH es más seguro.');
       const before = ctx.lastReport?.(ctx.agent.id)?.metrics?.ssh;
-      findings.push(...loginFindings(ssh.accepted, newLogins(ssh.accepted, before?.available ? before.accepted : null)));
+      const keys = await checks.keys();
+      findings.push(...loginFindings(ssh.accepted, newLogins(ssh.accepted, before?.available ? before.accepted : null), new Date(), keys));
     }
 
     const ports = (checks && (await checks.ports())) || { exposed: [] };
@@ -274,6 +383,7 @@ export default {
 
     return {
       findings,
+      events, // las alertas con la gravedad del veredicto (sin las de la propia Oficina)
       metrics: {
         ssh,
         // Sin acceso al servidor los puertos no se revisan: se manda null (y no una lista vacía) para que ni el panel

@@ -150,11 +150,12 @@ export async function runAgent(agent, ctx, input) {
   const started = Date.now();
   try {
     const log = (message, meta) => logActivity(agent.id, agent.schedule === 'manual' ? 'trabajo' : 'lectura', message, meta);
-    const { findings: raw, metrics } = await agent.run({ ...ctx, log, input, agent });
+    // Un agente puede devolver las alertas ya juzgadas (otra gravedad, o sin las falsas alarmas): ciberseguridad.js.
+    const { findings: raw, metrics, events: judged } = await agent.run({ ...ctx, log, input, agent });
     const findings = agent.schedule === 'manual' ? raw : applyReviews(agent.id, raw);
     const status = statusOf(findings);
     const previous = latestReport(agent.id);
-    const events = input?.events || [];
+    const events = judged || input?.events || [];
     // Lo que el agente recuerda de Obsidian. Si el dueño escribió algo nuevo en sus notas, la firma cambia
     // y se pide un diagnóstico nuevo que lo tenga en cuenta.
     const memory = agent.schedule === 'manual' ? { text: '', ownerKey: '' } : memoryFor(agent, findings, events);
@@ -167,7 +168,8 @@ export async function runAgent(agent, ctx, input) {
     // Alertas del monitor que motivaron esta revisión (las de recuperación no cuentan).
     const alerts = events.filter((e) => e.severity !== 'info');
     // Si todo lo que llegó son buenas noticias ("volvió a funcionar"), no se gasta IA en investigarlo.
-    const goodNews = events.length > 0 && !alerts.length;
+    // (Una alerta que el veredicto bajó a info no es una recuperación.)
+    const goodNews = events.length > 0 && !alerts.length && events.some((e) => eventSeverity(e) === 'ok');
 
     if (agent.schedule === 'manual') {
       // Los agentes bajo pedido ya usan la IA en su propio trabajo.
@@ -246,32 +248,39 @@ export async function runAgent(agent, ctx, input) {
     // A Telegram, el informe de cada tanda de alertas que investigó (también las recuperaciones), de cada revisión
     // que alguien pidió (aunque nada haya cambiado) y, en las demás revisiones, los cambios de estado.
     // Un acceso SSH nuevo como root o desde Internet se avisa siempre, aunque el agente ya estuviera en amarillo.
-    const urgent = findings.some((f) => f.urgent && f.severity !== 'info');
-    const requested = (input?.manual === true || urgent) && agent.schedule !== 'manual';
+    // Una llave conocida entrando desde la tailnet también se avisa, en verde (info).
+    const flagged = findings.filter((f) => f.urgent);
+    const requested = (input?.manual === true || flagged.length > 0) && agent.schedule !== 'manual';
     if (events.length || changed || requested) {
       const severity = events.length ? worstOf(events) : status;
       // El mensaje va breve: la lista completa queda en el .md.
-      const titles = [...important].sort((a, b) => Boolean(b.urgent) - Boolean(a.urgent)).map((f) => f.title);
+      const titles = [...flagged, ...important.filter((f) => !f.urgent)].map((f) => f.title);
       const brief = titles.slice(0, 3).join(' · ') + (titles.length > 3 ? ` y ${titles.length - 3} más` : '');
       const what = events.length
         ? events.length === 1
           ? eventLine(events[0])
           : `${events.length} alertas del monitor:\n${bullets(events.map(eventLine))}`
-        : status === 'ok'
-          ? changed
-            ? 'Todo volvió a la normalidad.'
-            : 'Revisé y no encontré problemas.'
-          : brief || STATUS_TEXT[status];
+        : flagged.length
+          ? brief
+          : status === 'ok'
+            ? changed
+              ? 'Todo volvió a la normalidad.'
+              : 'Revisé y no encontré problemas.'
+            : brief || STATUS_TEXT[status];
       // Lo que sigue mal además de las alertas: sin alerta ya va en "Qué pasa", y lo del mismo contenedor o dominio
       // de la alerta sería repetirla.
       const named = new Set(events.map((e) => e.name));
       const others = events.length ? important.filter((f) => !named.has(f.resource?.name)) : [];
       const pending = others.length ? `\nSigue pendiente:\n${bullets(others.slice(0, 5).map((f) => f.title))}` : '';
+      // El veredicto de las reglas (ciberseguridad.js): sin IA, el mensaje igual dice qué pasó y qué hacer.
+      const verdicts = findings.filter((f) => f.verdict).map((f) => `${f.title}. ${f.detail}`);
       const diagnosis = goodNews
         ? `Volvió a funcionar.${pending || ' No veo otros problemas.'}`
         : report.aiSummary
           ? `${report.aiReused ? '(Lo mismo que la vez anterior: nada cambió.)\n' : ''}${report.aiSummary}`
-          : !problems
+          : verdicts.length
+            ? `Lo que averigüé:\n${bullets(verdicts)}${report.aiFailed ? '\n(La IA no respondió: esto sale de mis reglas.)' : ''}${pending}`
+            : !problems
             ? events.length
               ? 'Revisé y no encontré otros problemas.'
               : ''

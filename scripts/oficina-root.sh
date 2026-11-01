@@ -72,6 +72,18 @@ case "$name" in
     fi
     echo "bloqueada: ${how:+si ($how)}${how:-no}"
     ;;
+  llaves_ssh)
+    # Solo la huella y el comentario de cada llave (ssh-keygen -l), nunca la llave misma.
+    for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+      [ -r "$f" ] || continue
+      case "$f" in
+        /root/*) user=root ;;
+        *) user=${f#/home/}; user=${user%%/*} ;;
+      esac
+      ssh-keygen -lf "$f" 2>/dev/null | sed "s/^/llave: $user /"
+    done
+    true
+    ;;
   contenedores)
     docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}'
     ;;

@@ -404,6 +404,10 @@ export async function diagnose(agent, report, memory = '', { past = [], team = [
         ? '\n- Si lo que ve un compañero tiene la misma causa que lo tuyo, conéctalo ("probablemente es lo mismo que ve Sofía en los logs") ' +
           'y trátalo como un solo problema. No repitas su diagnóstico ni inventes lo que no está en su resumen.'
         : '') +
+      (report.findings?.some((f) => f.verdict)
+        ? '\n- Los hallazgos con "verdict" ya los decidiste con tus reglas, mirando la IP en el servidor: explícalos en palabras ' +
+          'simples y di qué hacer, sin cambiar su gravedad ni volver a investigar lo que ya dicen.'
+        : '') +
       sshRule(agent) +
       rulesOf(agent.instructions) +
       '\n\nSi hay mejoras que no son urgentes, termina con una línea que diga exactamente "SUGERENCIAS:" y debajo hasta 3 líneas que ' +
