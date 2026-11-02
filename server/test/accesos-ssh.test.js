@@ -74,16 +74,19 @@ test('solo es nuevo lo que no estaba en la revisión anterior; sin revisión ant
 });
 
 test('la vigilancia entre revisiones encuentra el acceso nuevo con una sola consulta', async () => {
+  // urgentLogins lee las últimas 24 h desde la hora real: los accesos van unos minutos atrás.
+  const ago = (min) => new Date(Math.floor(Date.now() / 1000) * 1000 - min * 60_000).toISOString();
+  const first = ago(30);
   const lines = [
-    '2026-11-01T04:00:09+0000 vps sshd-session[1]: Accepted publickey for root from 10.0.1.8 port 1 ssh2',
-    '2026-11-01T04:14:54+0000 vps sshd-session[2]: Accepted publickey for root from 100.126.176.61 port 2 ssh2',
-    '2026-11-01T04:20:00+0000 vps sshd-session[3]: Accepted publickey for oficina from 100.121.147.81 port 3 ssh2',
+    `${first.replace('.000Z', '+0000')} vps sshd-session[1]: Accepted publickey for root from 10.0.1.8 port 1 ssh2`,
+    `${ago(15).replace('.000Z', '+0000')} vps sshd-session[2]: Accepted publickey for root from 100.126.176.61 port 2 ssh2`,
+    `${ago(10).replace('.000Z', '+0000')} vps sshd-session[3]: Accepted publickey for oficina from 100.121.147.81 port 3 ssh2`,
   ];
   const asked = [];
   const ctx = {
     local: false,
     ssh: async (name) => (asked.push(name), lines.join('\n')),
-    lastReport: () => ({ metrics: { ssh: { available: true, accepted: [login('root', '10.0.1.8', '2026-11-01T04:00:09.000Z')] } } }),
+    lastReport: () => ({ metrics: { ssh: { available: true, accepted: [login('root', '10.0.1.8', first)] } } }),
   };
   const fresh = await urgentLogins(ctx, 'ciberseguridad');
   assert.deepEqual(fresh.map((a) => `${a.user}@${a.ip}`), ['root@100.126.176.61']);
