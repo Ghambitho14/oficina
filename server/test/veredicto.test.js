@@ -102,3 +102,12 @@ test('las IPs van a la IA como apodos fijos: puede consultar con el apodo y su r
   assert.equal(textOf({ content: [{ type: 'text', text: `Es ${b}` }] }), 'Es 203.0.113.5');
   assert.equal(redact(out), out); // un apodo no se vuelve a ocultar
 });
+
+test('el apodo sin número se traduce solo si una sola IP tiene esa red', async () => {
+  const { redact, realIp, reveal } = await import('../ai.js');
+  redact('desde 198.51.100.7, 192.0.2.10 y 192.0.2.20');
+  assert.equal(reveal('banip 198.51.x.x.x  # la IP'), 'banip 198.51.100.7  # la IP');
+  assert.equal(realIp('198.51.x.x'), '198.51.100.7');
+  assert.equal(reveal('whois 192.0.x.x'), 'whois 192.0.x.x'); // dos IPs en esa red: no adivina
+  assert.equal(realIp('192.0.x.x#999'), '192.0.x.x#999');
+});

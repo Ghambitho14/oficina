@@ -191,9 +191,20 @@ const aliasOf = (ip, a, b) => {
   }
   return aliases.byIp.get(ip);
 };
-const ALIAS = /\b\d{1,3}\.\d{1,3}\.x\.x#\d+\b/g;
-export const realIp = (target) => aliases.byAlias.get(String(target ?? '').trim()) ?? target;
-export const reveal = (text) => String(text ?? '').replace(ALIAS, (alias) => aliases.byAlias.get(alias) ?? alias);
+// La IA a veces escribe el apodo sin el número ("45.45.x.x" o "45.45.x.x.x"): vale si una sola IP tiene esa red.
+const ALIAS = /\b(\d{1,3}\.\d{1,3})\.x\.x(?:\.x)*(?:#\d+\b)?/g;
+const ipOfAlias = (alias) => {
+  if (aliases.byAlias.has(alias)) return aliases.byAlias.get(alias);
+  if (alias.includes('#')) return undefined;
+  const net = alias.match(/^\d{1,3}\.\d{1,3}\./)?.[0];
+  const ips = net ? [...aliases.byIp.keys()].filter((ip) => ip.startsWith(net)) : [];
+  return ips.length === 1 ? ips[0] : undefined;
+};
+export const realIp = (target) => {
+  const t = String(target ?? '').trim();
+  return (/^\d{1,3}\.\d{1,3}\.x\.x/.test(t) && ipOfAlias(t)) || target;
+};
+export const reveal = (text) => String(text ?? '').replace(ALIAS, (alias) => ipOfAlias(alias) ?? alias);
 
 export const redact = (text) =>
   config.ai.redact
