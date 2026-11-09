@@ -4,7 +4,7 @@ process.env.TIMEZONE = 'America/Santiago';
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { parseSsh } = await import('../collectors/sshlog.js');
-const { originOf, clockOf, newLogins, isUrgent, loginFindings, urgentLogins } = await import('../agents/ciberseguridad.js');
+const { originOf, clockOf, newLogins, isUrgent, loginFindings, urgentLogins, forgetKeys } = await import('../agents/ciberseguridad.js');
 
 const now = new Date('2026-11-01T05:30:00Z'); // 02:30 en Chile
 const login = (user, ip, at, method = 'publickey') => ({ method, user, ip, at });
@@ -93,4 +93,34 @@ test('la vigilancia entre revisiones encuentra el acceso nuevo con una sola cons
   assert.deepEqual(asked, ['accesos_ssh']);
   // Sin reporte anterior no se compara (el primero de todos no avisa de lo viejo).
   assert.deepEqual(await urgentLogins({ ...ctx, lastReport: () => null }, 'ciberseguridad'), []);
+});
+
+test('una llave conocida desde la red interna (Coolify) no despierta al agente; una desconocida sí', async () => {
+  forgetKeys();
+  const ago = (min) => new Date(Math.floor(Date.now() / 1000) * 1000 - min * 60_000).toISOString().replace('.000Z', '+0000');
+  const lines = [
+    `${ago(30)} vps sshd-session[1]: Accepted publickey for root from 10.0.1.6 port 1 ssh2: ED25519 SHA256:bbb`,
+    `${ago(3)} vps sshd-session[2]: Accepted publickey for root from 10.0.1.6 port 2 ssh2: ED25519 SHA256:bbb`,
+    `${ago(2)} vps sshd-session[3]: Accepted publickey for root from 10.0.1.7 port 3 ssh2: ED25519 SHA256:zzz`,
+  ];
+  const asked = [];
+  const ctx = {
+    local: false,
+    ssh: async (name) => (asked.push(name), name === 'llaves_ssh' ? 'llave: root 256 SHA256:bbb coolify (ED25519)' : lines.join('\n')),
+    lastReport: () => ({ metrics: { ssh: { available: true, accepted: [{ method: 'publickey', user: 'root', ip: '10.0.1.6', at: new Date(ago(30).replace('+0000', 'Z')).toISOString(), key: 'SHA256:bbb' }] } } }),
+  };
+  const fresh = await urgentLogins(ctx, 'ciberseguridad');
+  assert.deepEqual(fresh.map((a) => `${a.user}@${a.ip}`), ['root@10.0.1.7']);
+  // Las llaves se recuerdan: la segunda vuelta no las vuelve a pedir.
+  await urgentLogins(ctx, 'ciberseguridad');
+  assert.equal(asked.filter((n) => n === 'llaves_ssh').length, 1);
+
+  const keys = [{ user: 'root', fingerprint: 'SHA256:bbb', name: 'coolify' }];
+  const coolify = { ...login('root', '10.0.1.6', '2026-11-01T05:00:00Z'), key: 'SHA256:bbb' };
+  const tailnet = { ...login('root', '100.126.176.61', '2026-11-01T05:05:00Z'), key: 'SHA256:bbb' };
+  const [inside, pc] = loginFindings([coolify, tailnet], [coolify, tailnet], now, keys);
+  assert.equal(inside.severity, 'info');
+  assert.equal(Boolean(inside.urgent), false); // queda en verde en el informe, sin Telegram
+  assert.equal(Boolean(pc.urgent), true); // desde la tailnet se sigue avisando
+  forgetKeys();
 });

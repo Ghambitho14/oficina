@@ -175,6 +175,10 @@ export function newLogins(accepted = [], previous) {
 }
 // Los que hay que avisar en el momento: entrar como root o desde Internet.
 export const isUrgent = (a) => a.user === 'root' || originOf(a.ip) === 'internet';
+// Una llave conocida que entra desde la red interna (Docker: Coolify revisa el servidor varias veces por minuto) no
+// despierta al agente ni se avisa: queda en verde en el informe. Una desconocida, o desde la tailnet o Internet, sí.
+export const isQuiet = (a, keys = []) =>
+  originOf(a.ip) === 'interna' && Boolean(a.key) && keys.some((k) => k.fingerprint === a.key && k.user === a.user);
 
 // Un hallazgo por usuario e IP, con la hora, cuántas veces y de dónde. Desde Internet es crítico: puede ser un atacante.
 // `urgent` marca los que traen un acceso nuevo: la Oficina avisa por Telegram aunque el estado no cambie.
@@ -211,7 +215,7 @@ export function loginFindings(accepted = [], fresh = [], now = new Date(), keys 
       title: `Login SSH ${who}${withKey} desde ${first.ip} a las ${clockOf(last.at, now)}`,
       detail: `${n === 1 ? '1 acceso' : `${n} accesos`} con ${how} ${when}, ${ORIGIN_TEXT[origin]}.${advice}`,
       note: `Login SSH ${who} desde ${first.ip}`,
-      ...(list.some((a) => freshKeys.has(loginKey(a))) && { urgent: true }),
+      ...(list.some((a) => freshKeys.has(loginKey(a)) && !isQuiet(a, keys)) && { urgent: true }),
     };
   });
 }
@@ -222,8 +226,21 @@ export async function urgentLogins(ctx, agentId) {
   const ssh = checks ? await checks.ssh() : null;
   const before = ctx.lastReport(agentId)?.metrics?.ssh;
   if (!ssh?.available || !before?.available) return [];
-  return newLogins(ssh.accepted, before.accepted).filter(isUrgent);
+  const fresh = newLogins(ssh.accepted, before.accepted).filter(isUrgent);
+  // Las llaves solo hacen falta si entró alguien desde la red interna; se recuerdan una hora para no consultar cada vuelta.
+  if (!fresh.some((a) => originOf(a.ip) === 'interna')) return fresh;
+  const keys = await knownKeys(checks);
+  return fresh.filter((a) => !isQuiet(a, keys));
 }
+
+let keyCache = { at: 0, keys: [] };
+async function knownKeys(checks) {
+  if (keyCache.keys.length && Date.now() - keyCache.at < 60 * 60_000) return keyCache.keys;
+  const keys = await checks.keys();
+  if (keys.length) keyCache = { at: Date.now(), keys }; // si la consulta falla, se reintenta en la próxima vuelta
+  return keys;
+}
+export const forgetKeys = () => void (keyCache = { at: 0, keys: [] });
 
 // Ej.: "5 updates can be applied immediately. 2 of these updates are standard security updates."
 export function parseUpdates(text) {
