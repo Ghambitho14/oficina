@@ -2,7 +2,7 @@
   "_ayuda": "Copia este archivo a config/agentes.json y edítalo: los cambios se aplican solos en unos segundos, sin reiniciar. Lo que borres toma el valor de esta plantilla. Colores como #3b82f6. modelo vacío = el general (AI_MODEL o el elegido en Ajustes). especialidad: lo que sabe de su oficio. instrucciones: cómo hace su trabajo (diagnóstico, ideas o búsqueda), una regla por línea. instruccionesChat: cómo responde en el chat. esfuerzo: cuánto piensa la IA con modelos de Claude (low, medium o high; auto = poco, y más si hay un problema crítico o una alerta del monitor). Telegram minimo: ok (todo), warn (solo problemas) o crit (solo críticos). silenciar: contenedores cuyas alertas del monitor solo se anotan en Actividad, sin despertar a nadie ni avisar por Telegram (* = cualquier texto); su salud la sigue viendo la revisión normal.",
   "alertaSinDueño": "informatica",
   "paginas": [],
-  "silenciar": ["coolify-sentinel*"],
+  "silenciar": ["sentinel", "coolify-sentinel*"],
   "agentes": {
     "informatica": {
       "activo": true,
