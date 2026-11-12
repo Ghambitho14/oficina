@@ -130,6 +130,8 @@ function build(user, puestos, check) {
   if (user.agentes !== undefined && !isObj(user.agentes)) return { error: '"agentes" debe ser un objeto { "informatica": { ... } }' };
   if (user.paginas !== undefined && (!Array.isArray(user.paginas) || user.paginas.some((u) => typeof u !== 'string' || !/^https?:\/\/\S+$/.test(u))))
     return { error: '"paginas" debe ser una lista de direcciones, p. ej. ["https://tusitio.com"]' };
+  if (user.silenciar !== undefined && (!Array.isArray(user.silenciar) || user.silenciar.some((n) => typeof n !== 'string' || !n.trim())))
+    return { error: '"silenciar" debe ser una lista de nombres de contenedor, p. ej. ["coolify-sentinel*"]' };
 
   const merged = {};
   for (const [id, a] of Object.entries({ ...base.agentes, ...user.agentes })) {
@@ -158,6 +160,7 @@ function build(user, puestos, check) {
   }
   const data = {
     paginas: user.paginas ?? base.paginas ?? [],
+    silenciar: user.silenciar ?? base.silenciar ?? [],
     alertaSinDueño: user['alertaSinDueño'] ?? base['alertaSinDueño'],
     agentes: Object.values(merged),
   };
@@ -235,6 +238,12 @@ export function agentsFile() {
 export const alertRoutes = () => agentsFile().agentes.flatMap((a) => a.alertas.map((kind) => ({ kind, agent: a.id })));
 export const defaultAlertAgent = () => agentsFile()['alertaSinDueño'];
 export const watchedPages = () => agentsFile().paginas;
+
+// Contenedores cuyas alertas del monitor no despiertan a nadie (p. ej. coolify-sentinel, que Coolify recrea solo
+// a cada rato). "*" vale por cualquier texto y no importan las mayúsculas. Su salud la sigue viendo la revisión normal.
+const glob = (pattern) => new RegExp(`^${pattern.trim().split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
+export const isSilenced = (e) =>
+  e.kind.startsWith('container_') && Boolean(e.name) && agentsFile().silenciar.some((p) => glob(p).test(e.name));
 // Para probar cambios sin esperar a que cambie la fecha del archivo.
 export const reloadAgentsFile = () => {
   stamp = null;

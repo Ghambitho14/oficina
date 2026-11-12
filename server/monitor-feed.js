@@ -4,7 +4,7 @@
 // Solo escucha con el botón "Agentes de monitor" encendido: apagado, no le pregunta nada al monitor.
 import { config } from './config.js';
 import { activeAgents, findAgent, backupAgent, monitorAgentsOn } from './agents/index.js';
-import { alertRoutes } from './agents-file.js';
+import { alertRoutes, isSilenced } from './agents-file.js';
 import { getSetting, setSetting, logActivity, addAlert } from './db.js';
 import { monitorEnabled, fetchEvents, lastEventId, eventTitle } from './collectors/monitor.js';
 import { runAll, runAgent, createContext, working } from './scheduler.js';
@@ -93,6 +93,11 @@ async function poll() {
       monitorStatus.received += 1;
       // Las alertas de SSH que provocan las propias consultas de la Oficina no despiertan a nadie (si no, es un ciclo).
       if (isOwnSshAlert(e)) continue;
+      // Los contenedores de "silenciar" (agentes.json) solo quedan anotados: ni investigación ni Telegram.
+      if (isSilenced(e)) {
+        logActivity('sistema', 'alerta', `Alerta silenciada (agentes.json → silenciar): ${eventTitle(e)}`, { kind: e.kind });
+        continue;
+      }
       const agent = agentFor(e.kind);
       if (!agent) {
         logActivity('sistema', 'alerta', `Alerta del monitor sin agente que la atienda: ${eventTitle(e)}`, { kind: e.kind });

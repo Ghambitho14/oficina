@@ -79,6 +79,18 @@ test('cuando vuelve, el reporte va en verde y sin gastar IA', async () => {
   assert.match(msg.document, /Volvió a funcionar\./);
 });
 
+test('los contenedores de "silenciar" (coolify-sentinel en la plantilla) solo se anotan: ni Ana ni Telegram', async () => {
+  const before = telegram.messages.length;
+  monitor.emit({ kind: 'container_gone', severity: 'info', name: 'coolify-sentinel' });
+  monitor.emit({ kind: 'container_new', severity: 'info', name: 'Coolify-Sentinel' });
+  await waitFor(async () => (await activity(oficina)).filter((a) => /Alerta silenciada .*coolify-sentinel/i.test(a.message)).length === 2, 'las dos alertas silenciadas');
+  // Una alerta de otro contenedor sí llega: así se sabe que las silenciadas ya pasaron sin mandar nada.
+  monitor.emit({ kind: 'container_new', severity: 'info', name: 'api-nueva' });
+  await waitFor(() => telegram.messages.slice(before).some((m) => /api-nueva/.test(m.text)), 'el aviso del contenedor no silenciado');
+  assert.ok(!telegram.messages.slice(before).some((m) => /sentinel/i.test(m.text + (m.document || ''))));
+  assert.ok(!(await activity(oficina)).some((a) => /Me llegó una alerta del monitor: .*sentinel/i.test(a.message)));
+});
+
 test('Leo solo avisa lo crítico (telegram.minimo = crit)', async () => {
   const before = telegram.messages.length;
   monitor.emit({ kind: 'snort', severity: 'warn', name: 'snort', detail: 'escaneo' });
